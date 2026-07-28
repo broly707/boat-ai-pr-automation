@@ -1,6 +1,7 @@
 import jwt
 import time
 import os
+import base64
 import requests
 
 
@@ -11,11 +12,23 @@ INSTALLATION_ID = os.environ.get("GITHUB_INSTALLATION_ID", "148257662")
 
 def generate_jwt():
 
-    private_key = os.environ.get("GITHUB_PRIVATE_KEY", "")
+    # Support both GITHUB_APP_PRIVATE_KEY (base64) and GITHUB_PRIVATE_KEY (raw PEM)
+    private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
+
+    if private_key:
+        # Decode from base64 if it looks like base64 (doesn't start with ---)
+        if not private_key.strip().startswith("-----"):
+            try:
+                private_key = base64.b64decode(private_key).decode("utf-8")
+            except Exception:
+                pass
+    else:
+        private_key = os.environ.get("GITHUB_PRIVATE_KEY", "")
 
     if not private_key:
         raise ValueError(
-            "GITHUB_PRIVATE_KEY environment variable is not set."
+            "Neither GITHUB_APP_PRIVATE_KEY nor GITHUB_PRIVATE_KEY "
+            "environment variable is set."
         )
 
     # Render env vars replace literal \n with \\n — fix that
