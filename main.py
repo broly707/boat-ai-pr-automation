@@ -1,7 +1,6 @@
 import json
 import hmac
 import hashlib
-from click import prompt
 from fastapi import FastAPI, Request
 
 from github.repository_manager import clone_repository
@@ -23,7 +22,7 @@ from ai.reviewer import review_code
 
 app = FastAPI()
 
-GITHUB_SECRET = "ai-reviewer-secret-2026"
+GITHUB_SECRET = "8vR#2mL!Q9xP@7tN$5kZ&4cH^1wJ*6Fy"
 
 
 def verify_signature(

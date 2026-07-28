@@ -4,3 +4,4 @@ requests
 gitpython
 pyjwt
 cryptography
+groq
