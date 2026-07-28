@@ -1,21 +1,38 @@
-AI Code Reviewer
+# boat-ai-pr-automation
 
-Requirements:
-- Python 3.14+
-- Ollama
+AI Code Reviewer — automatically reviews Pull Requests using Groq LLM and posts feedback as a GitHub comment.
+
+## Requirements
+
+- Python 3.11+
 - Git
+- Groq API Key
+- GitHub App (with webhook configured)
 
-Install:
+## Install
 
+```bash
 pip install -r requirements.txt
+```
 
-Run:
+## Environment Variables
 
-python -m uvicorn main:app --reload
+Copy `.env.example` to `.env` and fill in:
 
-Required:
-- GitHub App ID
-- Installation ID
-- Private Key (.pem)
-- Webhook Secret
-- Ollama model (qwen3:8b)
+```
+GROQ_API_KEY=
+GITHUB_WEBHOOK_SECRET=
+GITHUB_APP_ID=
+GITHUB_INSTALLATION_ID=
+GITHUB_APP_PRIVATE_KEY=
+```
+
+## Run Locally
+
+```bash
+uvicorn main:app --reload
+```
+
+## Deploy
+
+The app is configured for Render via `Procfile`. Push to `main` to trigger auto-deploy.

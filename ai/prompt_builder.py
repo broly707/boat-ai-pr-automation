@@ -3,6 +3,10 @@ def build_review_prompt(
     changed_files: list
 ) -> str:
 
+    files_list = "\n".join(
+        f"- {f}" for f in changed_files
+    ) if changed_files else "- (no files listed)"
+
     return f"""
 Review this code as a senior Team Lead.
 
@@ -21,6 +25,10 @@ Do not provide suggested fixes.
 Do not provide final code.
 Do not assume missing code.
 Do not speculate.
+
+Changed Files:
+
+{files_list}
 
 Code:
 

@@ -1,6 +1,8 @@
 import json
 import hmac
 import hashlib
+import os
+import shutil
 from fastapi import FastAPI, Request
 
 from github.repository_manager import clone_repository
@@ -22,7 +24,10 @@ from ai.reviewer import review_code
 
 app = FastAPI()
 
-GITHUB_SECRET = "8vR#2mL!Q9xP@7tN$5kZ&4cH^1wJ*6Fy"
+GITHUB_SECRET = os.environ.get(
+    "GITHUB_WEBHOOK_SECRET",
+    ""
+)
 
 
 def verify_signature(
@@ -348,6 +353,20 @@ async def github_webhook(
                 print(
                     f"GitHub Comment Error: {e}"
                 )
+
+            finally:
+
+                # Clean up the cloned workspace to prevent disk buildup
+                try:
+                    if os.path.exists(workspace_path):
+                        shutil.rmtree(workspace_path)
+                        print(
+                            f"Workspace cleaned up: {workspace_path}"
+                        )
+                except Exception as cleanup_err:
+                    print(
+                        f"Workspace Cleanup Warning: {cleanup_err}"
+                    )
 
         else:
 
