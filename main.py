@@ -17,7 +17,10 @@ from github.changed_files import (
     get_incremental_changed_files
 )
 
-from github.pr_commenter import post_pr_comment
+from github.pr_commenter import (
+    post_pr_comment,
+    get_pr_details
+)
 
 from ai.prompt_builder import build_review_prompt
 from ai.reviewer import review_code
@@ -199,12 +202,20 @@ async def github_webhook(
             "edited"
         ]:
 
-            # Read PR title and body directly from the webhook payload
-            pr_title = (pr.get("title") or "").strip()
-            pr_body = (pr.get("body") or "").strip()
+            # Always fetch LIVE PR data from GitHub API.
+            # This ensures Redeliver scenarios also use the current description.
+            payload_title = (pr.get("title") or "").strip()
+            payload_body = (pr.get("body") or "").strip()
 
-            print(f"[DEBUG] PR Title from payload: {pr_title!r}")
-            print(f"[DEBUG] PR Body from payload : {pr_body!r}")
+            live_title, live_body = get_pr_details(repo_name, pr_number)
+
+            # Prefer live API data. Fall back to payload if API returns empty.
+            pr_title = (live_title.strip() if live_title else payload_title)
+            pr_body = (live_body.strip() if live_body else payload_body)
+
+            print(f"[DEBUG] Payload body : {payload_body!r}")
+            print(f"[DEBUG] Live API body: {live_body!r}")
+            print(f"[DEBUG] Final body used for validation: {pr_body!r}")
 
             print("\nExecuting PR Description Validation Gate...")
             is_valid, validation_reason = validate_pr_description(
