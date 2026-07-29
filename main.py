@@ -17,7 +17,10 @@ from github.changed_files import (
     get_incremental_changed_files
 )
 
-from github.pr_commenter import post_pr_comment
+from github.pr_commenter import (
+    post_pr_comment,
+    get_pr_details
+)
 
 from ai.prompt_builder import build_review_prompt
 from ai.reviewer import review_code
@@ -192,14 +195,17 @@ async def github_webhook(
             f"Branch Target Route: [{target_branch}] <- [{source_branch}]"
         )
 
-        pr_title = (pr.get("title") or "").strip()
-        pr_body = (pr.get("body") or "").strip()  # body is null in JSON → None in Python
-
         if action in [
             "opened",
             "synchronize",
-            "reopened"
+            "reopened",
+            "edited"
         ]:
+
+            # Fetch live PR details directly from GitHub API to avoid stale webhook payloads
+            live_title, live_body = get_pr_details(repo_name, pr_number)
+            pr_title = (live_title or pr.get("title") or "").strip()
+            pr_body = (live_body or pr.get("body") or "").strip()
 
             print("\nExecuting PR Description Validation Gate...")
             is_valid, validation_reason = validate_pr_description(
