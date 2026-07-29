@@ -15,11 +15,6 @@ def validate_pr_description(
     print(f"Title: {pr_title!r}")
     print(f"Body : {pr_body!r}")
 
-    # Only return hardcoded empty if BOTH title and body are completely empty
-    if not pr_title and not pr_body:
-        print("Validation Result: FAIL (Both Title and Body are empty)")
-        return False, "PR title and description are completely empty. Please explain what this PR does."
-
     display_title = pr_title if pr_title else "(empty)"
     display_body = pr_body if pr_body else "(empty)"
 
@@ -45,7 +40,7 @@ Reason: <one short sentence explaining the exact reason>
     try:
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
-            print("[WARNING] GROQ_API_KEY not found in environment variables.")
+            print("[WARNING] GROQ_API_KEY not found in environment variables. Using heuristic validation.")
             return _local_heuristic_validation(pr_title, pr_body)
 
         client = Groq(api_key=api_key)
@@ -84,31 +79,38 @@ Reason: <one short sentence explaining the exact reason>
             is_valid = (verdict == "PASS")
             return is_valid, reason
 
-        print("[WARNING] Could not parse LLM response format cleanly.")
+        print("[WARNING] Could not parse LLM response format cleanly. Using heuristic validation.")
         return _local_heuristic_validation(pr_title, pr_body)
 
     except Exception as e:
-        print(f"PR Description Validation Error: {e}")
+        print(f"PR Description Validation Error: {e}. Using heuristic validation.")
         return _local_heuristic_validation(pr_title, pr_body)
 
 
 def _local_heuristic_validation(pr_title: str, pr_body: str) -> tuple[bool, str]:
-    """Fallback validation heuristic when LLM API is unavailable or response format parsing fails."""
-    if not pr_body:
-        return False, "PR description is empty. Please add a description explaining your changes."
-
-    clean_body = pr_body.lower().strip()
-    words = clean_body.split()
+    """Fallback validation heuristic when LLM API is unavailable."""
+    title_clean = (pr_title or "").strip()
+    body_clean = (pr_body or "").strip()
 
     placeholders = {
         "test", "asdf", "qwerty", "n/a", "todo", "fix",
-        "update", "fix bug", "done", "fixed", "changes", "wip"
+        "update", "fix bug", "done", "fixed", "changes", "wip", "no description"
     }
 
-    if clean_body in placeholders or (len(words) <= 2 and words[0] in placeholders):
-        return False, f"PR description '{pr_body}' is a placeholder. Please describe the actual changes made."
+    # 1. Evaluate body if present
+    if body_clean:
+        body_words = body_clean.lower().split()
+        if body_clean.lower() in placeholders or (len(body_words) <= 2 and body_words[0] in placeholders):
+            return False, f"PR description '{body_clean}' is placeholder/meaningless text."
+        if len(body_words) < 4:
+            return False, f"PR description '{body_clean}' is too short (fewer than 4 words)."
+        return True, "Passed description validation."
 
-    if len(words) < 4:
-        return False, f"PR description '{pr_body}' is too brief. Please provide a complete sentence explaining your changes."
+    # 2. If body is empty, evaluate title for context
+    if title_clean:
+        title_words = title_clean.lower().split()
+        if title_clean.lower() in placeholders or (len(title_words) <= 2 and title_words[0] in placeholders):
+            return False, f"PR description is missing and PR title '{title_clean}' is a meaningless placeholder."
+        return False, f"PR description is empty for PR titled '{title_clean}'. Please add a detailed description."
 
-    return True, "Passed description validation."
+    return False, "PR title and description are both missing."

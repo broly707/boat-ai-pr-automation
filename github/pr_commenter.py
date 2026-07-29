@@ -57,7 +57,7 @@ def get_pr_details(
         )
 
         headers = {
-            "Authorization": f"token {token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json"
         }
 
@@ -70,9 +70,12 @@ def get_pr_details(
             data = response.json()
             title = data.get("title") or ""
             body = data.get("body") or ""
+            print(f"[GITHUB API] Fetched PR #{pr_number} -> Title: {title!r}, Body: {body!r}")
             return title, body
 
+        print(f"[GITHUB API WARNING] Failed to fetch PR #{pr_number} details. Status: {response.status_code}")
+
     except Exception as e:
-        print(f"Error fetching live PR details from GitHub API: {e}")
+        print(f"[GITHUB API ERROR] Error fetching live PR details: {e}")
 
     return "", ""
