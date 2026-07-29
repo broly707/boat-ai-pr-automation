@@ -21,6 +21,7 @@ from github.pr_commenter import post_pr_comment
 
 from ai.prompt_builder import build_review_prompt
 from ai.reviewer import review_code
+from ai.description_validator import validate_pr_description
 
 app = FastAPI()
 
@@ -191,11 +192,47 @@ async def github_webhook(
             f"Branch Target Route: [{target_branch}] <- [{source_branch}]"
         )
 
+        pr_title = pr.get("title", "")
+        pr_body = pr.get("body", "")
+
         if action in [
             "opened",
             "synchronize",
             "reopened"
         ]:
+
+            print("\nExecuting PR Description Validation Gate...")
+            is_valid, validation_reason = validate_pr_description(
+                pr_title,
+                pr_body
+            )
+
+            if not is_valid:
+                print(
+                    f"\nPR Description Validation Gate FAILED: {validation_reason}"
+                )
+                print(
+                    "Stopping pipeline. Review step will not be executed."
+                )
+
+                try:
+                    post_pr_comment(
+                        repo_name,
+                        pr_number,
+                        f"❌ **PR Description Validation Failed**\n\n**Reason:** {validation_reason}"
+                    )
+                    print(
+                        "Validation Failure Comment Posted To GitHub"
+                    )
+                except Exception as e:
+                    print(
+                        f"GitHub Comment Error (Validation Gate): {e}"
+                    )
+
+                return {
+                    "status": "failed",
+                    "reason": validation_reason
+                }
 
             workspace_path = (
                 f"workspace/pr_{pr_number}"
