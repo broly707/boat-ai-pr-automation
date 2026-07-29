@@ -51,9 +51,12 @@ def get_pr_details(
     try:
         token = generate_installation_token()
 
+        # Use /issues/ endpoint — PRs are issues in GitHub's API and have the
+        # same body field. This uses "issues" permission which is already
+        # granted (post_pr_comment uses the same endpoint and works).
         url = (
             f"https://api.github.com/repos/"
-            f"{repo_name}/pulls/{pr_number}"
+            f"{repo_name}/issues/{pr_number}"
         )
 
         headers = {
