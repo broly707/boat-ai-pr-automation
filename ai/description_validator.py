@@ -15,15 +15,21 @@ def validate_pr_description(
     print(f"Title: {pr_title!r}")
     print(f"Body : {pr_body!r}")
 
-    display_title = pr_title if pr_title else "(empty)"
-    display_body = pr_body if pr_body else "(empty)"
+    # --- Fast pre-check: empty body is an instant FAIL ---
+    # Do NOT pass "(empty)" to the LLM — it reads it as gibberish text
+    if not pr_body:
+        print("Validation Result: FAIL (description is empty)")
+        return (
+            False,
+            "PR description is empty — please describe what this PR does."
+        )
 
     prompt = f"""
 You are a strict Pull Request description validator.
 
 Evaluate the following PR details:
-PR Title: {display_title}
-PR Description: {display_body}
+PR Title: {pr_title if pr_title else "(no title)"}
+PR Description: {pr_body}
 
 Validation Rules:
 1. FAIL if the PR description is empty, missing, or blank.
