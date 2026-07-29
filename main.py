@@ -209,9 +209,18 @@ async def github_webhook(
 
             live_title, live_body = get_pr_details(repo_name, pr_number)
 
-            # Prefer live API data. Fall back to payload if API returns empty.
-            pr_title = (live_title.strip() if live_title else payload_title)
-            pr_body = (live_body.strip() if live_body else payload_body)
+            # Prefer the richer of live API vs webhook payload (avoids stale/placeholder bodies).
+            def _richer_text(primary: str, fallback: str) -> str:
+                primary = (primary or "").strip()
+                fallback = (fallback or "").strip()
+                if not primary:
+                    return fallback
+                if not fallback:
+                    return primary
+                return primary if len(primary) >= len(fallback) else fallback
+
+            pr_title = _richer_text(live_title, payload_title)
+            pr_body = _richer_text(live_body, payload_body)
 
             print(f"[DEBUG] Payload body : {payload_body!r}")
             print(f"[DEBUG] Live API body: {live_body!r}")
