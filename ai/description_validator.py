@@ -10,24 +10,35 @@ def validate_pr_description(
     pr_title = (title or "").strip()
     pr_body = (body or "").strip()
 
+    print("\n===== PR DESCRIPTION VALIDATION GATE =====")
+    print(f"Title: {pr_title!r}")
+    print(f"Body : {pr_body!r}")
+
+    # --- Fast pre-check: catch empty/null body immediately without LLM ---
+    if not pr_body:
+        print("Pre-check FAILED: description body is empty or null.")
+        return (
+            False,
+            "PR description body is empty — please describe what this PR does."
+        )
+
     prompt = f"""
-Analyze the following Pull Request title and description to validate if it provides a meaningful explanation of what the PR actually does.
+You are a strict PR description validator. Evaluate ONLY the Description field below.
+The Title is provided for context only — do NOT use it to compensate for a bad Description.
 
-Title: {pr_title}
-Description: {pr_body}
+PR Title: {pr_title}
+PR Description (the field being validated): {pr_body}
 
-Evaluation Rules:
-1. FAIL if the description is empty, blank, whitespace-only, or an unfilled template.
-2. FAIL if the description is gibberish, random characters, or meaningless placeholder text (e.g. "test", "asdf", "N/A", "todo", "fix bug", "update", a single word, generic boilerplate).
-3. FAIL if the description does not form coherent, meaningful sentence(s) that explain what the PR actually does.
-4. PASS otherwise.
+Validation Rules (apply them strictly to the Description field only):
+1. FAIL if the description is a single word, two words, or very short with no real meaning.
+2. FAIL if the description is gibberish, random characters, or filler text (e.g. "asdf", "test", "N/A", "todo", "update", "fix", "done", generic boilerplate, copy-paste templates with unfilled placeholders).
+3. FAIL if the description does not form coherent, meaningful sentence(s) that clearly explain what this PR actually does.
+4. PASS only if the description is a proper, human-written explanation of the PR changes.
 
-Respond in EXACTLY this two-line format:
+Respond in EXACTLY this two-line format with no extra text:
 Verdict: PASS or FAIL
 Reason: <one short sentence>
 """
-
-    print("\n===== PR DESCRIPTION VALIDATION GATE =====")
 
     try:
         client = Groq(
