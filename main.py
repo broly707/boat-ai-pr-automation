@@ -192,8 +192,8 @@ async def github_webhook(
             f"Branch Target Route: [{target_branch}] <- [{source_branch}]"
         )
 
-        pr_title = pr.get("title", "")
-        pr_body = pr.get("body", "")
+        pr_title = (pr.get("title") or "").strip()
+        pr_body = (pr.get("body") or "").strip()  # body is null in JSON → None in Python
 
         if action in [
             "opened",
@@ -209,24 +209,37 @@ async def github_webhook(
 
             if not is_valid:
                 print(
-                    f"\nPR Description Validation Gate FAILED: {validation_reason}"
+                    "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
                 )
                 print(
-                    "Stopping pipeline. Review step will not be executed."
+                    f"PR DESCRIPTION VALIDATION GATE >>> FAILED <<<"
+                )
+                print(
+                    f"Reason: {validation_reason}"
+                )
+                print(
+                    "Pipeline STOPPED. Code review will NOT run."
+                )
+                print(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
                 )
 
                 try:
                     post_pr_comment(
                         repo_name,
                         pr_number,
-                        f"❌ **PR Description Validation Failed**\n\n**Reason:** {validation_reason}"
+                        f"\u274c **PR Description Validation Failed**\n\n**Reason:** {validation_reason}\n\nPlease update your PR description with a clear explanation of what this PR does, then push a new commit to re-trigger the review."
                     )
                     print(
-                        "Validation Failure Comment Posted To GitHub"
+                        "Validation Failure Comment Posted To GitHub Successfully"
                     )
                 except Exception as e:
                     print(
-                        f"GitHub Comment Error (Validation Gate): {e}"
+                        f"[WARNING] Could not post GitHub comment: {e}"
+                    )
+                    print(
+                        "[WARNING] Check that GITHUB_APP_PRIVATE_KEY, GITHUB_APP_ID, "
+                        "and GITHUB_INSTALLATION_ID are set in Render environment variables."
                     )
 
                 return {
