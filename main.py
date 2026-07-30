@@ -25,6 +25,10 @@ from github.pr_commenter import (
 from ai.prompt_builder import build_review_prompt
 from ai.reviewer import review_code
 from ai.description_validator import validate_pr_description
+from ai.comment_validator import (
+    validate_code_comments,
+    format_comment_validation_failure
+)
 
 app = FastAPI()
 
@@ -375,6 +379,68 @@ async def github_webhook(
             print(
                 f"\nSuccessfully Parsed {len(changed_files)} Changed File(s)"
             )
+
+            print("\nExecuting Code Comment Validation Gate...")
+            comment_ref = (
+                after_sha
+                if action == "synchronize" and after_sha
+                else None
+            )
+            comment_mismatches = validate_code_comments(
+                workspace_path,
+                changed_files,
+                source_branch,
+                comment_ref
+            )
+
+            if comment_mismatches:
+                print(
+                    "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                )
+                print(
+                    "CODE COMMENT VALIDATION GATE >>> FAILED <<<"
+                )
+                print(
+                    f"Mismatches Found: {len(comment_mismatches)}"
+                )
+                print(
+                    "Pipeline STOPPED. Code review will NOT run."
+                )
+                print(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                )
+
+                try:
+                    post_pr_comment(
+                        repo_name,
+                        pr_number,
+                        format_comment_validation_failure(
+                            comment_mismatches
+                        )
+                    )
+                    print(
+                        "Comment Validation Failure Comment Posted Successfully"
+                    )
+                except Exception as e:
+                    print(
+                        f"[WARNING] Could not post GitHub comment: {e}"
+                    )
+
+                try:
+                    if os.path.exists(workspace_path):
+                        shutil.rmtree(workspace_path)
+                        print(
+                            f"Workspace cleaned up: {workspace_path}"
+                        )
+                except Exception as cleanup_err:
+                    print(
+                        f"Workspace Cleanup Warning: {cleanup_err}"
+                    )
+
+                return {
+                    "status": "failed",
+                    "reason": "comment_validation_failed"
+                }
 
             print(
                 "Starting Local AI LLM Processing Engine..."
