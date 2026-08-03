@@ -22,6 +22,11 @@ from github.pr_commenter import (
     get_pr_details
 )
 
+from github.reviewer_manager import (
+    capture_original_reviewers,
+    handle_reviewers_for_validation_result
+)
+
 from ai.prompt_builder import build_review_prompt
 from ai.reviewer import review_code
 from ai.description_validator import validate_pr_description
@@ -31,6 +36,12 @@ from ai.comment_validator import (
 )
 
 app = FastAPI()
+
+REVIEWER_MANAGEMENT_ACTIONS = [
+    "opened",
+    "synchronize",
+    "reopened",
+]
 
 GITHUB_SECRET = os.environ.get(
     "GITHUB_WEBHOOK_SECRET",
@@ -230,6 +241,18 @@ async def github_webhook(
             print(f"[DEBUG] Live API body: {live_body!r}")
             print(f"[DEBUG] Final body used for validation: {pr_body!r}")
 
+            if action in REVIEWER_MANAGEMENT_ACTIONS:
+                try:
+                    capture_original_reviewers(
+                        repo_name,
+                        pr_number,
+                        pr
+                    )
+                except Exception as e:
+                    print(
+                        f"[WARNING] Could not capture original reviewers: {e}"
+                    )
+
             print("\nExecuting PR Description Validation Gate...")
             is_valid, validation_reason = validate_pr_description(
                 pr_title,
@@ -269,6 +292,13 @@ async def github_webhook(
                     print(
                         "[WARNING] Check that GITHUB_APP_PRIVATE_KEY, GITHUB_APP_ID, "
                         "and GITHUB_INSTALLATION_ID are set in Render environment variables."
+                    )
+
+                if action in REVIEWER_MANAGEMENT_ACTIONS:
+                    handle_reviewers_for_validation_result(
+                        repo_name,
+                        pr_number,
+                        validation_passed=False
                     )
 
                 return {
@@ -426,6 +456,13 @@ async def github_webhook(
                         f"[WARNING] Could not post GitHub comment: {e}"
                     )
 
+                if action in REVIEWER_MANAGEMENT_ACTIONS:
+                    handle_reviewers_for_validation_result(
+                        repo_name,
+                        pr_number,
+                        validation_passed=False
+                    )
+
                 try:
                     if os.path.exists(workspace_path):
                         shutil.rmtree(workspace_path)
@@ -493,6 +530,13 @@ async def github_webhook(
 
                 print(
                     f"GitHub Comment Error: {e}"
+                )
+
+            if action in REVIEWER_MANAGEMENT_ACTIONS:
+                handle_reviewers_for_validation_result(
+                    repo_name,
+                    pr_number,
+                    validation_passed=True
                 )
 
             finally:
