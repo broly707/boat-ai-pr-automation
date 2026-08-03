@@ -532,13 +532,6 @@ async def github_webhook(
                     f"GitHub Comment Error: {e}"
                 )
 
-            if action in REVIEWER_MANAGEMENT_ACTIONS:
-                handle_reviewers_for_validation_result(
-                    repo_name,
-                    pr_number,
-                    validation_passed=True
-                )
-
             finally:
 
                 # Clean up the cloned workspace to prevent disk buildup
@@ -552,6 +545,13 @@ async def github_webhook(
                     print(
                         f"Workspace Cleanup Warning: {cleanup_err}"
                     )
+
+            if action in REVIEWER_MANAGEMENT_ACTIONS:
+                handle_reviewers_for_validation_result(
+                    repo_name,
+                    pr_number,
+                    validation_passed=True
+                )
 
         else:
 
