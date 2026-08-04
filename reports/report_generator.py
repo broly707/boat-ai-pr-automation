@@ -26,26 +26,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # Internal constants
 # ---------------------------------------------------------------------------
 
-# Pattern that matches a single issue block as produced by prompt_builder.py:
-#   Issue: <text>
-#   Code:  <snippet>
-#   Reason: <text>
-#   Suggestion: <text>
-_ISSUE_BLOCK_PATTERN = re.compile(
-    r"Issue\s*:\s*(?P<issue>.+?)(?=\nIssue\s*:|\Z)",
-    re.DOTALL | re.IGNORECASE
-)
-
-# Within an issue block, try to pick up a Code: line as a file/line hint.
-_CODE_LINE_PATTERN = re.compile(
-    r"Code\s*:\s*(?P<code>[^\n]+)",
+# Known field labels that follow the issue description in the LLM output.
+# Used to cleanly strip everything after the issue text regardless of whether
+# the LLM emits a newline before the label or concatenates them inline.
+_NEXT_FIELD_PATTERN = re.compile(
+    r"\s*(?:Code|Reason|Suggestion)\s*:",
     re.IGNORECASE
-)
-
-# Attempt to strip Reason/Suggestion trailing lines from the issue text.
-_TRAILING_FIELDS_PATTERN = re.compile(
-    r"\n(?:Code|Reason|Suggestion)\s*:.*",
-    re.DOTALL | re.IGNORECASE
 )
 
 # Horizontal rule text used inside the .docx
@@ -58,37 +44,66 @@ _SEPARATOR = "\u2500" * 40
 
 def parse_review_issues(review_text: str) -> list[dict]:
     """
-    Parse the raw AI review text into a list of issue dicts.
+    Parse the raw AI review text into a list of structured issue dicts.
 
     Each dict has the keys:
         file  (str) – file/line hint extracted from the Code: field, or ""
         line  (str) – line reference extracted from the Code: field, or ""
         issue (str) – the cleaned issue description text
 
-    If the structured pattern is not found, falls back to splitting on
-    numbered list markers (e.g. "1.", "2.") so the report is never empty
-    when the AI produced free-form output.
+    Strategy: split on every 'Issue:' label rather than relying on newlines
+    between blocks. This handles both newline-separated and inline-concatenated
+    LLM output formats:
+
+        # Newline-separated (standard):
+        Issue: Something wrong\nCode: x = y\nReason: ...
+
+        # Inline/concatenated (seen in practice):
+        Issue: Something wrongCode: x = yReason: ...
+
+    Fallback: if no 'Issue:' label is found, splits on numbered list markers
+    (e.g. '1.', '2.') so the report is never empty.
     """
     issues = []
 
-    blocks = _ISSUE_BLOCK_PATTERN.findall(review_text)
+    # Split on every occurrence of 'Issue:' (case-insensitive).
+    # Element [0] is the preamble before the first issue — always skipped.
+    raw_blocks = re.split(r"Issue\s*:", review_text, flags=re.IGNORECASE)
 
-    if blocks:
-        for raw_block in blocks:
+    if len(raw_blocks) > 1:
+        for raw_block in raw_blocks[1:]:
             raw_block = raw_block.strip()
+            if not raw_block:
+                continue
 
-            # Extract code hint before stripping trailing fields.
-            code_match = _CODE_LINE_PATTERN.search(raw_block)
-            code_hint = code_match.group("code").strip() if code_match else ""
+            # Extract issue text — stop at the first following field label.
+            # _NEXT_FIELD_PATTERN uses \s* so it matches whether the label
+            # appears on a new line ('\nCode:') or inline ('Code:').
+            field_match = _NEXT_FIELD_PATTERN.search(raw_block)
+            if field_match:
+                issue_text = raw_block[: field_match.start()].strip()
+            else:
+                issue_text = raw_block.strip()
 
-            # Strip Code/Reason/Suggestion lines from the issue text.
-            issue_text = _TRAILING_FIELDS_PATTERN.sub("", raw_block).strip()
+            # Collapse internal newlines / extra whitespace to a single space.
             issue_text = re.sub(r"\s+", " ", issue_text).strip()
 
             if not issue_text:
                 continue
 
-            # Try to split file path and line number from the code hint.
+            # Try to extract a file/line hint from the Code: field.
+            code_hint = ""
+            code_match = re.search(
+                r"Code\s*:\s*(.+?)(?=\s*(?:Reason|Suggestion)\s*:|$)",
+                raw_block,
+                re.DOTALL | re.IGNORECASE
+            )
+            if code_match:
+                # Take only the first line of the code snippet as the hint.
+                code_hint = (
+                    code_match.group(1).strip().splitlines()[0].strip()
+                )
+
             file_hint, line_hint = _extract_file_and_line(code_hint)
 
             issues.append({
@@ -98,19 +113,19 @@ def parse_review_issues(review_text: str) -> list[dict]:
             })
 
     else:
-        # Fallback: numbered list items.
+        # Fallback: numbered list items (e.g. '1. Something wrong').
         fallback_blocks = re.split(
             r"\n\s*\d+[\.\)]\s+",
             review_text.strip()
         )
-        for idx, block in enumerate(fallback_blocks):
+        for block in fallback_blocks:
             block = block.strip()
             if not block:
                 continue
             issues.append({
                 "file": "",
                 "line": "",
-                "issue": block,
+                "issue": re.sub(r"\s+", " ", block).strip(),
             })
 
     return issues
