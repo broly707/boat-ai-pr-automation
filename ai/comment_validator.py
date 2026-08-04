@@ -179,6 +179,83 @@ def validate_code_comments(
     return all_mismatches
 
 
+def _build_suggestions(mismatches: list[dict]) -> str:
+    """
+    Generate actionable suggestions for each mismatch and a general tips section.
+    The suggestions are derived from the mismatch reason text so that they are
+    specific to the actual problem found in the code.
+    """
+    suggestion_lines = []
+
+    for index, item in enumerate(mismatches, start=1):
+        reason_lower = item["reason"].lower()
+        file_ref = f"`{item['file']}` (line {item['line']})"
+
+        # Determine the most relevant suggestion based on the reason text.
+        if any(kw in reason_lower for kw in ("param", "@param", "parameter")):
+            suggestion = (
+                f"Update the `@param` doc tag in {file_ref} to match the actual "
+                "parameter name(s), type(s), and description used in the implementation."
+            )
+        elif any(kw in reason_lower for kw in ("return", "@return", "returns")):
+            suggestion = (
+                f"Fix the `@return`/`@returns` doc tag in {file_ref} to accurately "
+                "reflect the value, type, or condition that the function actually returns."
+            )
+        elif any(kw in reason_lower for kw in ("outdated", "old", "stale", "no longer")):
+            suggestion = (
+                f"The comment in {file_ref} appears to describe an older version of the "
+                "code. Update it to reflect the current implementation, or remove it if "
+                "it is no longer relevant."
+            )
+        elif any(kw in reason_lower for kw in ("condition", "if", "else", "branch", "check")):
+            suggestion = (
+                f"Correct the comment in {file_ref} to describe the actual condition or "
+                "branch logic. Make sure any referenced variables, operators, or thresholds "
+                "match what the code uses."
+            )
+        elif any(kw in reason_lower for kw in ("calculation", "formula", "compute", "math", "arithmetic")):
+            suggestion = (
+                f"Update the comment in {file_ref} to reflect the correct formula or "
+                "calculation. Double-check the operators and operands described against "
+                "the code."
+            )
+        elif any(kw in reason_lower for kw in ("behavior", "does not perform", "not perform")):
+            suggestion = (
+                f"Rewrite the comment in {file_ref} to accurately describe what the code "
+                "actually does. Remove or correct any references to behavior that is not "
+                "present in the implementation."
+            )
+        else:
+            # Generic fallback suggestion.
+            suggestion = (
+                f"Review the comment in {file_ref} and update it so that it precisely "
+                "describes the surrounding code. If the code is correct, fix the comment; "
+                "if the comment is the source of truth, fix the code."
+            )
+
+        suggestion_lines.append(f"{index}. {suggestion}")
+
+    per_mismatch_block = "\n".join(suggestion_lines)
+
+    general_tips = (
+        "**General tips to avoid comment mismatches:**\n"
+        "- Keep comments co-located with the code they describe and update them whenever "
+        "the code changes.\n"
+        "- Prefer self-documenting code for simple logic; add comments only when the "
+        "**why** (not the **what**) needs explaining.\n"
+        "- For doc-comments (`@param`, `@return`, etc.), regenerate or review them after "
+        "every signature change.\n"
+        "- Run a quick diff of comments vs. code before pushing to catch stale descriptions early."
+    )
+
+    return (
+        "**Suggestions to fix the mismatches:**\n\n"
+        f"{per_mismatch_block}\n\n"
+        f"{general_tips}"
+    )
+
+
 def format_comment_validation_failure(mismatches: list[dict]) -> str:
     blocks = []
 
@@ -193,10 +270,13 @@ def format_comment_validation_failure(mismatches: list[dict]) -> str:
 
     mismatch_text = "\n\n".join(blocks)
 
+    suggestions = _build_suggestions(mismatches)
+
     return (
         "\u274c\n\n"
         "Comment Validation Failed\n\n"
         f"{mismatch_text}\n\n"
         "Please update the code comment (or fix the code logic) so they match, "
-        "then push a new commit to re-trigger the review."
+        "then push a new commit to re-trigger the review.\n\n"
+        f"{suggestions}"
     )
