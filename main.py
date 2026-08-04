@@ -3,7 +3,9 @@ import hmac
 import hashlib
 import os
 import shutil
+from pathlib import Path
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 
 from github.repository_manager import clone_repository
 from github.diff_extractor import (
@@ -34,6 +36,8 @@ from ai.comment_validator import (
     validate_code_comments,
     format_comment_validation_failure
 )
+
+from reports.report_generator import generate_word_report
 
 app = FastAPI()
 
@@ -90,12 +94,47 @@ def verify_signature(
         return False
 
 
+REPORTS_DIR = os.path.join(
+    os.path.dirname(__file__),
+    "reports",
+    "files"
+)
+
+
 @app.get("/")
 def home():
 
     return {
         "message": "AI Code Reviewer V2 Running"
     }
+
+
+@app.get("/reports/download/{filename}")
+def download_report(filename: str):
+    """
+    Serve a generated Word (.docx) review report by filename.
+    Returns 404 if the file does not exist.
+    """
+    report_path = Path(REPORTS_DIR) / filename
+
+    if not report_path.exists() or not report_path.is_file():
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "error",
+                "message": f"Report '{filename}' not found."
+            }
+        )
+
+    return FileResponse(
+        path=str(report_path),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument"
+            ".wordprocessingml.document"
+        ),
+        filename=filename
+    )
 
 
 @app.post("/github/webhook")
@@ -509,6 +548,47 @@ async def github_webhook(
             review = review_code(
                 prompt
             )
+
+            # ---- Word Report Generation (additive) ----------------------
+            # Generate a downloadable .docx report from the review results.
+            # If report generation fails for any reason, the original review
+            # string is used unchanged and the PR comment is still posted.
+            try:
+                report_file_path = generate_word_report(
+                    repo_name,
+                    pr_number,
+                    review,
+                    REPORTS_DIR
+                )
+                report_filename = os.path.basename(report_file_path)
+
+                base_url = os.environ.get("BASE_URL", "").rstrip("/")
+
+                if base_url:
+                    download_url = (
+                        f"{base_url}/reports/download/{report_filename}"
+                    )
+                    review = (
+                        f"{review}\n\n"
+                        "---\n"
+                        f"\U0001f4c4 [Download Word Report]({download_url})"
+                    )
+                    print(
+                        f"[REPORT] Download link appended to review comment: "
+                        f"{download_url}"
+                    )
+                else:
+                    print(
+                        "[REPORT] BASE_URL not set — download link will not "
+                        "be included in the PR comment."
+                    )
+
+            except Exception as report_err:
+                print(
+                    f"[REPORT] Warning: Could not generate Word report: "
+                    f"{report_err}. Continuing without report."
+                )
+            # ---- End Word Report Generation ------------------------------
 
             print(
                 "\nPosting Comment To GitHub..."

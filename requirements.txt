@@ -5,3 +5,4 @@ gitpython
 pyjwt
 cryptography
 groq
+python-docx
