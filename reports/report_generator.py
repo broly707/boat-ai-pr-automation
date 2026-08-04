@@ -263,20 +263,6 @@ def _build_document(
             heading_run.bold = True
             heading_run.font.size = Pt(12)
 
-            # File
-            _add_issue_field(
-                doc,
-                "File",
-                item["file"] if item["file"] else "N/A"
-            )
-
-            # Line
-            _add_issue_field(
-                doc,
-                "Line",
-                item["line"] if item["line"] else "N/A"
-            )
-
             # Issue description
             _add_issue_field(doc, "Issue", item["issue"])
 
