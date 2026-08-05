@@ -37,7 +37,10 @@ from ai.comment_validator import (
     format_comment_validation_failure
 )
 
-from reports.report_generator import generate_word_report
+from reports.report_generator import (
+    generate_word_report,
+    generate_mismatch_report
+)
 
 app = FastAPI()
 
@@ -480,12 +483,59 @@ async def github_webhook(
                 )
 
                 try:
+                    failure_message = format_comment_validation_failure(
+                        comment_mismatches
+                    )
+
+                    # ---- Word Report Generation (additive) ---------------
+                    # Generate a .docx report from the mismatches and append
+                    # a download link to the failure message when BASE_URL is
+                    # set. If anything fails the original message is used.
+                    try:
+                        report_file_path = generate_mismatch_report(
+                            repo_name,
+                            pr_number,
+                            comment_mismatches,
+                            REPORTS_DIR
+                        )
+                        report_filename = os.path.basename(
+                            report_file_path
+                        )
+                        base_url = (
+                            os.environ.get("BASE_URL", "").rstrip("/")
+                        )
+                        if base_url:
+                            download_url = (
+                                f"{base_url}/reports/download/"
+                                f"{report_filename}"
+                            )
+                            failure_message = (
+                                f"{failure_message}\n\n"
+                                "---\n"
+                                f"\U0001f4c4 [Download Word Report]"
+                                f"({download_url})"
+                            )
+                            print(
+                                "[REPORT] Download link appended to "
+                                "comment validation failure comment: "
+                                f"{download_url}"
+                            )
+                        else:
+                            print(
+                                "[REPORT] BASE_URL not set — download "
+                                "link will not be included in the comment."
+                            )
+                    except Exception as report_err:
+                        print(
+                            f"[REPORT] Warning: Could not generate Word "
+                            f"report: {report_err}. Continuing without report."
+                        )
+                    # ---- End Word Report Generation ----------------------
+
                     post_pr_comment(
                         repo_name,
                         pr_number,
-                        format_comment_validation_failure(
-                            comment_mismatches
-                        )
+                        failure_message
                     )
                     print(
                         "Comment Validation Failure Comment Posted Successfully"

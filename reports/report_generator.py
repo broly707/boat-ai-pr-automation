@@ -214,6 +214,59 @@ def generate_word_report(
     return file_path
 
 
+def generate_mismatch_report(
+    repo_name: str,
+    pr_number: int,
+    mismatches: list[dict],
+    report_dir: str
+) -> str:
+    """
+    Generate a .docx report from structured comment-validation mismatches.
+
+    Each mismatch dict is expected to have: file, line, comment, reason.
+    File and Line fields are populated directly from the mismatch data.
+
+    Parameters
+    ----------
+    repo_name   : Full repository name, e.g. "org/repo"
+    pr_number   : Pull Request number
+    mismatches  : List of mismatch dicts from validate_code_comments()
+    report_dir  : Directory to save the report in (created if absent)
+
+    Returns
+    -------
+    Absolute path to the generated .docx file.
+    """
+    os.makedirs(report_dir, exist_ok=True)
+
+    # Convert structured mismatches into the common issue dict format.
+    # The mismatch reason becomes the issue description; file and line
+    # are carried through directly so they appear in the report.
+    issues = [
+        {
+            "file": item.get("file", "").strip(),
+            "line": item.get("line", "").strip(),
+            "issue": item.get("reason", "").strip(),
+        }
+        for item in mismatches
+        if item.get("reason", "").strip()
+    ]
+
+    review_date = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    repo_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)
+    timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = (
+        f"comment_validation_{repo_slug}_{pr_number}_{timestamp}.docx"
+    )
+    file_path = os.path.join(report_dir, filename)
+
+    doc = _build_document(repo_name, pr_number, review_date, issues)
+    doc.save(file_path)
+
+    print(f"[REPORT] Comment validation report saved: {file_path}")
+    return file_path
+
+
 # ---------------------------------------------------------------------------
 # Internal: document builder
 # ---------------------------------------------------------------------------
@@ -262,6 +315,14 @@ def _build_document(
             heading_run = heading_para.add_run(f"Issue {idx}")
             heading_run.bold = True
             heading_run.font.size = Pt(12)
+
+            # File (only when the information is available)
+            if item.get("file"):
+                _add_issue_field(doc, "File", item["file"])
+
+            # Line (only when the information is available)
+            if item.get("line"):
+                _add_issue_field(doc, "Line", item["line"])
 
             # Issue description
             _add_issue_field(doc, "Issue", item["issue"])
