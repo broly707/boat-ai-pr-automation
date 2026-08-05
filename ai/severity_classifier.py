@@ -8,9 +8,30 @@ Classifies AI Code Review issues into severity categories:
 
 Groups the original issue blocks under the corresponding severity headings
 without modifying the issue content, wording, or structure.
+Cleans up duplicate issues and self-corrected / invalidated false positives.
 """
 
 import re
+
+INVALIDATION_PATTERNS = [
+    r"upon\s+closer\s+inspection",
+    r"however,?\s+upon\s+closer",
+    r"is\s+not\s+actually\s+(?:an?\s+)?issue",
+    r"the\s+issue\s+is\s+not\s+with",
+    r"the\s+issue\s+is\s+actually\s+with",
+    r"is\s+actually\s+being\s+used",
+    r"is\s+actually\s+in\s+the\s+companion\s+object",
+    r"is\s+accessible\s+in\s+the\s+same\s+scope",
+    r"is\s+not\s+necessary\s+in\s+this\s+case",
+    r"disregard",
+    r"false\s+positive",
+    r"no\s+issue\s+here",
+    r"correction\s*:",
+    r"the\s+only\s+actual\s+issues?\s+found",
+    r"upon\s+closer\s+examination",
+    r"not\s+an\s+issue",
+    r"is\s+actually\s+correct",
+]
 
 
 def classify_issue_severity(issue_block: str) -> str:
@@ -47,9 +68,68 @@ def classify_issue_severity(issue_block: str) -> str:
     return "Moderate"
 
 
+def _clean_issue_block(block: str) -> str | None:
+    """
+    Cleans an issue block. Returns None if the issue was invalidated or false-positive.
+    """
+    if not block or not re.match(r"^Issue\s*:", block.strip(), re.IGNORECASE):
+        return None
+
+    # Check for invalidation keywords anywhere in the block
+    for pattern in INVALIDATION_PATTERNS:
+        if re.search(pattern, block, re.IGNORECASE):
+            return None
+
+    # Trim block to end at Suggestion field if present, or end of known fields
+    suggestion_match = re.search(
+        r"(Suggestion\s*:\s*.+?)(?=\n\n|\n[A-Z][a-z]+:|\Z)",
+        block,
+        re.DOTALL | re.IGNORECASE
+    )
+    if suggestion_match:
+        end_pos = suggestion_match.end()
+        clean_text = block[:end_pos].strip()
+    else:
+        # Otherwise trim trailing meta phrases
+        clean_text = re.sub(
+            r"\n\s*(?:However|The only actual|Upon closer|Correction|Disregard).*",
+            "",
+            block,
+            flags=re.DOTALL | re.IGNORECASE
+        ).strip()
+
+    return clean_text
+
+
+def _compute_issue_key(block: str) -> str:
+    """
+    Computes a normalized key for deduplication based on Issue title, File, Line, and Code.
+    """
+    issue_match = re.search(r"Issue\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
+    file_match = re.search(r"File\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
+    line_match = re.search(r"Line\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
+    code_match = re.search(r"Code\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
+
+    issue_str = issue_match.group(1).strip().lower() if issue_match else ""
+    file_str = file_match.group(1).strip().lower() if file_match else ""
+    line_str = line_match.group(1).strip().lower() if line_match else ""
+    code_str = code_match.group(1).strip().lower() if code_match else ""
+
+    issue_str = re.sub(r"\s+", " ", issue_str)
+    file_str = re.sub(r"\s+", " ", file_str)
+    line_str = re.sub(r"\s+", " ", line_str)
+    code_str = re.sub(r"\s+", " ", code_str)
+
+    if issue_str and (file_str or code_str):
+        return f"{issue_str}|{file_str}|{line_str}|{code_str}"
+
+    return re.sub(r"\s+", " ", block.lower())
+
+
 def classify_and_group_review(review_text: str) -> str:
     """
-    Parses issue blocks from the raw review text, classifies each block by severity,
+    Parses issue blocks from the raw review text, filters out invalidated/false-positive
+    issues, deduplicates identical issues, classifies each block by severity,
     and returns the review text with issues grouped under severity headings:
     - ### 🔴 High Severity
     - ### 🟠 Moderate Severity
@@ -60,12 +140,25 @@ def classify_and_group_review(review_text: str) -> str:
     if not review_text or "Issue:" not in review_text:
         return review_text
 
+    # Check if there is a late summary section like "The only actual issues found in the provided code are:"
+    # If so, prefer issue blocks after the last occurrence of such summary marker.
+    summary_marker_match = list(re.finditer(
+        r"the\s+only\s+actual\s+issues?\s+found.*?:",
+        review_text,
+        re.IGNORECASE
+    ))
+    if summary_marker_match:
+        last_marker = summary_marker_match[-1]
+        after_text = review_text[last_marker.end():].strip()
+        if "Issue:" in after_text:
+            review_text = after_text
+
     # Split into preamble and issue blocks.
-    # We split on occurrences of 'Issue:' (case-insensitive) using regex lookahead/split.
     raw_blocks = re.split(r"(?=\n?\s*Issue\s*:)", review_text, flags=re.IGNORECASE)
 
     preamble = ""
     issue_blocks = []
+    seen_keys = set()
 
     for block in raw_blocks:
         block_str = block.strip()
@@ -73,9 +166,14 @@ def classify_and_group_review(review_text: str) -> str:
             continue
 
         if re.match(r"^Issue\s*:", block_str, re.IGNORECASE):
-            issue_blocks.append(block_str)
+            cleaned_block = _clean_issue_block(block_str)
+            if cleaned_block:
+                key = _compute_issue_key(cleaned_block)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    issue_blocks.append(cleaned_block)
         else:
-            if not preamble:
+            if not preamble and not re.search(r"the\s+only\s+actual\s+issues?", block_str, re.IGNORECASE):
                 preamble = block_str
 
     if not issue_blocks:
@@ -98,7 +196,7 @@ def classify_and_group_review(review_text: str) -> str:
     # Build output sections
     sections = []
 
-    if preamble and not preamble.lower().startswith("here are the issues"):
+    if preamble and not preamble.lower().startswith("here are the issues") and not preamble.lower().startswith("the only actual"):
         sections.append(preamble)
 
     if high_issues:
@@ -111,3 +209,4 @@ def classify_and_group_review(review_text: str) -> str:
         sections.append("### 🟢 Low Severity\n\n" + "\n\n".join(low_issues))
 
     return "\n\n".join(sections)
+
