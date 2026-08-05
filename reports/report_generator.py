@@ -30,7 +30,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # Used to cleanly strip everything after the issue text regardless of whether
 # the LLM emits a newline before the label or concatenates them inline.
 _NEXT_FIELD_PATTERN = re.compile(
-    r"\s*(?:Code|Reason|Suggestion)\s*:",
+    r"\s*(?:File|Line|Code|Reason|Suggestion)\s*:",
     re.IGNORECASE
 )
 
@@ -47,8 +47,8 @@ def parse_review_issues(review_text: str) -> list[dict]:
     Parse the raw AI review text into a list of structured issue dicts.
 
     Each dict has the keys:
-        file  (str) – file/line hint extracted from the Code: field, or ""
-        line  (str) – line reference extracted from the Code: field, or ""
+        file  (str) – file/line hint extracted from File: or Code: field, or ""
+        line  (str) – line reference extracted from Line: or Code: field, or ""
         issue (str) – the cleaned issue description text
 
     Strategy: split on every 'Issue:' label rather than relying on newlines
@@ -56,10 +56,10 @@ def parse_review_issues(review_text: str) -> list[dict]:
     LLM output formats:
 
         # Newline-separated (standard):
-        Issue: Something wrong\nCode: x = y\nReason: ...
+        Issue: Something wrong\nFile: a.py\nLine: 10\nCode: x = y\nReason: ...
 
         # Inline/concatenated (seen in practice):
-        Issue: Something wrongCode: x = yReason: ...
+        Issue: Something wrongFile: a.pyLine: 10Code: x = yReason: ...
 
     Fallback: if no 'Issue:' label is found, splits on numbered list markers
     (e.g. '1.', '2.') so the report is never empty.
@@ -77,8 +77,6 @@ def parse_review_issues(review_text: str) -> list[dict]:
                 continue
 
             # Extract issue text — stop at the first following field label.
-            # _NEXT_FIELD_PATTERN uses \s* so it matches whether the label
-            # appears on a new line ('\nCode:') or inline ('Code:').
             field_match = _NEXT_FIELD_PATTERN.search(raw_block)
             if field_match:
                 issue_text = raw_block[: field_match.start()].strip()
@@ -91,7 +89,30 @@ def parse_review_issues(review_text: str) -> list[dict]:
             if not issue_text:
                 continue
 
-            # Try to extract a file/line hint from the Code: field.
+            # Extract File: and Line: fields if provided explicitly by LLM
+            file_match = re.search(
+                r"File\s*:\s*(.+?)(?=\s*(?:Line|Code|Reason|Suggestion|Issue)\s*:|$)",
+                raw_block,
+                re.DOTALL | re.IGNORECASE
+            )
+            line_match = re.search(
+                r"Line\s*:\s*(.+?)(?=\s*(?:File|Code|Reason|Suggestion|Issue)\s*:|$)",
+                raw_block,
+                re.DOTALL | re.IGNORECASE
+            )
+
+            file_hint = (
+                file_match.group(1).strip().splitlines()[0].strip()
+                if file_match
+                else ""
+            )
+            line_hint = (
+                line_match.group(1).strip().splitlines()[0].strip()
+                if line_match
+                else ""
+            )
+
+            # Try to extract a file/line hint from the Code: field as fallback.
             code_hint = ""
             code_match = re.search(
                 r"Code\s*:\s*(.+?)(?=\s*(?:Reason|Suggestion)\s*:|$)",
@@ -104,7 +125,12 @@ def parse_review_issues(review_text: str) -> list[dict]:
                     code_match.group(1).strip().splitlines()[0].strip()
                 )
 
-            file_hint, line_hint = _extract_file_and_line(code_hint)
+            if not file_hint or not line_hint:
+                fallback_file, fallback_line = _extract_file_and_line(code_hint)
+                if not file_hint:
+                    file_hint = fallback_file
+                if not line_hint:
+                    line_hint = fallback_line
 
             issues.append({
                 "file": file_hint,

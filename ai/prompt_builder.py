@@ -15,6 +15,8 @@ Report only issues that are directly supported by the code shown.
 For each issue provide:
 
 Issue:
+File:
+Line:
 Code:
 Reason:
 Suggestion:
