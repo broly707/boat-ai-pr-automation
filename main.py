@@ -36,6 +36,7 @@ from ai.comment_validator import (
     validate_code_comments,
     format_comment_validation_failure
 )
+from ai.severity_classifier import classify_and_group_review
 
 from reports.report_generator import (
     generate_word_report,
@@ -600,6 +601,7 @@ async def github_webhook(
             review = review_code(
                 prompt
             )
+            review = classify_and_group_review(review)
 
             # ---- Word Report Generation (additive) ----------------------
             # Generate a downloadable .docx report from the review results.
