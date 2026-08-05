@@ -5,7 +5,7 @@ import os
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, JSONResponse
 
 from github.repository_manager import clone_repository
 from github.diff_extractor import (
@@ -39,7 +39,8 @@ from ai.comment_validator import (
 
 from reports.report_generator import (
     generate_word_report,
-    generate_mismatch_report
+    generate_mismatch_report,
+    get_report_bytes
 )
 
 app = FastAPI()
@@ -116,12 +117,11 @@ def home():
 def download_report(filename: str):
     """
     Serve a generated Word (.docx) review report by filename.
-    Returns 404 if the file does not exist.
+    Checks disk, memory cache, or regenerates from GitHub on demand.
     """
-    report_path = Path(REPORTS_DIR) / filename
+    data = get_report_bytes(filename, REPORTS_DIR)
 
-    if not report_path.exists() or not report_path.is_file():
-        from fastapi.responses import JSONResponse
+    if not data:
         return JSONResponse(
             status_code=404,
             content={
@@ -130,13 +130,15 @@ def download_report(filename: str):
             }
         )
 
-    return FileResponse(
-        path=str(report_path),
+    return Response(
+        content=data,
         media_type=(
             "application/vnd.openxmlformats-officedocument"
             ".wordprocessingml.document"
         ),
-        filename=filename
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
     )
 
 

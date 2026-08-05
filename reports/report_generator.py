@@ -176,6 +176,9 @@ def _extract_file_and_line(code_hint: str) -> tuple[str, str]:
 # Public: generate_word_report
 # ---------------------------------------------------------------------------
 
+_REPORT_CACHE: dict[str, bytes] = {}
+
+
 def generate_word_report(
     repo_name: str,
     pr_number: int,
@@ -209,6 +212,14 @@ def generate_word_report(
 
     doc = _build_document(repo_name, pr_number, review_date, issues)
     doc.save(file_path)
+
+    try:
+        import io
+        buf = io.BytesIO()
+        doc.save(buf)
+        _REPORT_CACHE[filename] = buf.getvalue()
+    except Exception as cache_err:
+        print(f"[REPORT CACHE WARNING] {cache_err}")
 
     print(f"[REPORT] Word report saved: {file_path}")
     return file_path
@@ -263,8 +274,160 @@ def generate_mismatch_report(
     doc = _build_document(repo_name, pr_number, review_date, issues)
     doc.save(file_path)
 
+    try:
+        import io
+        buf = io.BytesIO()
+        doc.save(buf)
+        _REPORT_CACHE[filename] = buf.getvalue()
+    except Exception as cache_err:
+        print(f"[REPORT CACHE WARNING] {cache_err}")
+
     print(f"[REPORT] Comment validation report saved: {file_path}")
     return file_path
+
+
+def get_report_bytes(filename: str, report_dir: str) -> bytes | None:
+    """
+    Retrieve report file bytes by filename.
+    Checks disk first, then memory cache, then regenerates from GitHub on demand.
+    """
+    file_path = os.path.join(report_dir, filename)
+
+    if os.path.isfile(file_path):
+        try:
+            with open(file_path, "rb") as f:
+                return f.read()
+        except Exception:
+            pass
+
+    if filename in _REPORT_CACHE:
+        return _REPORT_CACHE[filename]
+
+    return _regenerate_report_on_demand(filename, report_dir)
+
+
+def _regenerate_report_on_demand(filename: str, report_dir: str) -> bytes | None:
+    """
+    Regenerate report file on demand if server restarted and disk was wiped.
+    Fetches the posted PR comments from GitHub API and rebuilds the .docx.
+    """
+    pattern = (
+        r"^(?P<prefix>pr|comment_validation)_(?P<repo_slug>.+?)_"
+        r"(?P<pr_number>\d+)_(?P<timestamp>\d+)\.docx$"
+    )
+    match = re.match(pattern, filename, re.IGNORECASE)
+    if not match:
+        return None
+
+    prefix = match.group("prefix").lower()
+    repo_slug = match.group("repo_slug")
+    pr_number = int(match.group("pr_number"))
+
+    if "__" in repo_slug:
+        repo_name = repo_slug.replace("__", "/")
+    else:
+        repo_name = repo_slug.replace("_", "/", 1)
+
+    print(
+        f"[REPORT REGEN] Regenerating report on demand for {repo_name} PR #{pr_number} ({filename})"
+    )
+
+    try:
+        import io
+        import requests
+        from github.github_auth import generate_installation_token
+
+        token = generate_installation_token()
+        url = f"https://api.github.com/repos/{repo_name}/issues/{pr_number}/comments"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json"
+        }
+        res = requests.get(url, headers=headers, params={"per_page": 100})
+        if res.status_code != 200:
+            print(f"[REPORT REGEN] GitHub API HTTP {res.status_code}: {res.text}")
+            return None
+
+        comments = res.json()
+        target_comment = None
+
+        if prefix == "pr":
+            for c in comments:
+                body = c.get("body") or ""
+                if "## AI Code Review" in body or "Issue:" in body:
+                    target_comment = body
+                    break
+            if target_comment:
+                clean_body = re.sub(
+                    r"\n\n---\n📄 \[Download Word Report\].*",
+                    "",
+                    target_comment,
+                    flags=re.DOTALL
+                )
+                clean_body = re.sub(r"^## AI Code Review\n\n", "", clean_body)
+                issues = parse_review_issues(clean_body)
+                review_date = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                doc = _build_document(repo_name, pr_number, review_date, issues)
+                os.makedirs(report_dir, exist_ok=True)
+                file_path = os.path.join(report_dir, filename)
+                doc.save(file_path)
+                buf = io.BytesIO()
+                doc.save(buf)
+                data = buf.getvalue()
+                _REPORT_CACHE[filename] = data
+                return data
+
+        elif prefix == "comment_validation":
+            for c in comments:
+                body = c.get("body") or ""
+                if "Comment Validation Failed" in body:
+                    target_comment = body
+                    break
+            if target_comment:
+                pattern_mismatch = re.compile(
+                    r"File:\s*(?P<file>.+?)\s*\n"
+                    r"Line:\s*(?P<line>.+?)\s*\n"
+                    r'Comment:\s*"(?P<comment>.+?)"\s*\n'
+                    r"Code:\s*(?P<code>.+?)\s*\n"
+                    r"Reason:\s*(?P<reason>.+?)(?=\n---|\nFile:|\n\nPlease|\Z)",
+                    re.DOTALL | re.IGNORECASE
+                )
+                mismatches = []
+                for m in pattern_mismatch.finditer(target_comment):
+                    mismatches.append({
+                        "file": m.group("file").strip(),
+                        "line": m.group("line").strip(),
+                        "comment": m.group("comment").strip(),
+                        "code": m.group("code").strip(),
+                        "reason": m.group("reason").strip()
+                    })
+
+                if mismatches:
+                    issues = [
+                        {
+                            "file": item.get("file", "").strip(),
+                            "line": item.get("line", "").strip(),
+                            "issue": item.get("reason", "").strip(),
+                        }
+                        for item in mismatches
+                        if item.get("reason", "").strip()
+                    ]
+                    review_date = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                    doc = _build_document(repo_name, pr_number, review_date, issues)
+                    os.makedirs(report_dir, exist_ok=True)
+                    file_path = os.path.join(report_dir, filename)
+                    doc.save(file_path)
+                    buf = io.BytesIO()
+                    doc.save(buf)
+                    data = buf.getvalue()
+                    _REPORT_CACHE[filename] = data
+                    return data
+
+    except Exception as err:
+        print(f"[REPORT REGEN ERROR] {err}")
+
+    return None
+
 
 
 # ---------------------------------------------------------------------------
