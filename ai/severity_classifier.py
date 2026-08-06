@@ -356,7 +356,7 @@ def classify_and_group_review(review_text: str) -> str:
     issue_blocks = []
     seen_keys = set()
 
-    for block in raw_blocks:
+    for idx, block in enumerate(raw_blocks):
         block_str = block.strip()
         if not block_str:
             continue
@@ -368,8 +368,10 @@ def classify_and_group_review(review_text: str) -> str:
                 if key not in seen_keys:
                     seen_keys.add(key)
                     issue_blocks.append(cleaned_block)
-        else:
-            if not preamble and not re.search(r"the\s+only\s+actual\s+issues?", block_str, re.IGNORECASE):
+        elif idx == 0:
+            # Only the first block before any Issue: block can be a preamble,
+            # and it must not contain issue fields or code markers.
+            if not re.search(r"the\s+only\s+actual\s+issues?|Code\s*:|N/A|File\s*:|Line\s*:", block_str, re.IGNORECASE):
                 preamble = block_str
 
     if not issue_blocks:
