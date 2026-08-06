@@ -22,7 +22,7 @@ Important rules for Line numbers:
 - Do NOT estimate, guess, or invent line numbers. Use ONLY the exact line numbers provided in the input line prefixes.
 
 Important rules for Code section format:
-- Always print Code: on its own line followed by a blank line, then render the code snippet as a multi-line block preserving all indentation, whitespace, line breaks, and formatting. Never put code inline after Code:. If snippet is N/A or absent, put N/A on a new line after blank line.
+- Always print Code: on its own line followed by a blank line, then render the code snippet wrapped inside a fenced Markdown code block with language syntax highlighting (e.g. ```kotlin ... ``` or ```xml ... ```), preserving all indentation, whitespace, line breaks, and formatting. Never put code inline after Code:. If snippet is N/A or absent, put ```text\nN/A\n``` after blank line.
 
 For each issue provide:
 
@@ -32,7 +32,9 @@ Line:
 
 Code:
 
+```<language>
 <exact code snippet from source file>
+```
 
 Reason:
 Suggestion:

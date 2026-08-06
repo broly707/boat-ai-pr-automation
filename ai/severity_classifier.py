@@ -68,13 +68,56 @@ def classify_issue_severity(issue_block: str) -> str:
     return "Moderate"
 
 
+def _detect_language(file_path: str) -> str:
+    if not file_path:
+        return "text"
+    file_path = file_path.strip().lower()
+    ext_map = {
+        ".kt": "kotlin",
+        ".kts": "kotlin",
+        ".java": "java",
+        ".xml": "xml",
+        ".py": "python",
+        ".js": "javascript",
+        ".jsx": "jsx",
+        ".ts": "typescript",
+        ".tsx": "tsx",
+        ".swift": "swift",
+        ".c": "c",
+        ".cpp": "cpp",
+        ".h": "cpp",
+        ".hpp": "cpp",
+        ".cs": "csharp",
+        ".go": "go",
+        ".rs": "rust",
+        ".rb": "ruby",
+        ".php": "php",
+        ".sh": "bash",
+        ".bash": "bash",
+        ".zsh": "bash",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".json": "json",
+        ".gradle": "groovy",
+        ".properties": "properties",
+        ".html": "html",
+        ".css": "css",
+        ".sql": "sql",
+        ".md": "markdown",
+    }
+    for ext, lang in ext_map.items():
+        if file_path.endswith(ext):
+            return lang
+    return "text"
+
+
 def format_issue_block(block: str) -> str:
     """
     Formats a single issue block to enforce strict Code section formatting rules:
     - Code: is on its own line
     - Followed by a blank line
-    - Followed by the exact code snippet (preserving multi-line formatting, indentation, and line breaks)
-    - If empty or 'N/A', displays 'N/A' on its own line after blank line.
+    - Followed by fenced Markdown code block with language syntax highlighting
+    - If empty or 'N/A', displays ```text\nN/A\n``` after blank line.
     - Fields: Issue, File, Line, Code, Reason, Suggestion
     """
     if not block or not re.search(r"Issue\s*:", block, re.IGNORECASE):
@@ -116,13 +159,14 @@ def format_issue_block(block: str) -> str:
 
     parts = []
 
+    file_val = fields.get("File", "").strip()
+    lang = _detect_language(file_val)
+
     if "Issue" in fields:
         parts.append(f"Issue: {fields['Issue'].strip()}")
 
-    if "File" in fields:
-        file_val = fields["File"].strip()
-        if file_val:
-            parts.append(f"File: {file_val}")
+    if file_val:
+        parts.append(f"File: {file_val}")
 
     if "Line" in fields:
         line_val = fields["Line"].strip()
@@ -134,6 +178,14 @@ def format_issue_block(block: str) -> str:
         code_raw = code_raw[1:]
     code_raw = code_raw.strip("\r\n")
 
+    # If code_raw is already wrapped in backticks, extract inner content and language
+    backtick_match = re.match(r"^```(\w*)\n?(.*)\n?```$", code_raw, re.DOTALL)
+    if backtick_match:
+        extracted_lang = backtick_match.group(1).strip()
+        if extracted_lang:
+            lang = extracted_lang
+        code_raw = backtick_match.group(2).strip("\r\n")
+
     code_lines = code_raw.splitlines() if code_raw else []
 
     while code_lines and not code_lines[0].strip():
@@ -144,11 +196,11 @@ def format_issue_block(block: str) -> str:
     cleaned_code = "\n".join(code_lines) if code_lines else ""
 
     if not cleaned_code or cleaned_code.strip().upper() == "N/A":
-        formatted_code = "N/A"
+        formatted_code_block = "```text\nN/A\n```"
     else:
-        formatted_code = cleaned_code
+        formatted_code_block = f"```{lang}\n{cleaned_code}\n```"
 
-    parts.append(f"\nCode:\n\n{formatted_code}")
+    parts.append(f"\nCode:\n\n{formatted_code_block}")
 
     if "Reason" in fields:
         reason_val = fields["Reason"].strip()
