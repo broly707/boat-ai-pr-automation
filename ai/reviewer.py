@@ -19,29 +19,31 @@ def review_code(prompt: str) -> str:
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            temperature=0.0,
-            max_tokens=2048,
+            temperature=1,
+            max_completion_tokens=2048,
             top_p=1,
+            reasoning_effort="medium",
             stream=True,
-            stop=None
+            stop=None,
         )
 
         for chunk in completion:
-            token = chunk.choices[0].delta.content or ""
+            if chunk.choices[0].delta.content:
+                token = chunk.choices[0].delta.content
 
-            # Append to our local aggregator buffer
-            review_buffer.append(token)
+                # Append to our local aggregator buffer
+                review_buffer.append(token)
 
-            # Instantly write the token out to the console terminal
-            sys.stdout.write(token)
-            sys.stdout.flush()
+                # Instantly write the token out to the console terminal
+                sys.stdout.write(token)
+                sys.stdout.flush()
 
     except Exception as e:
         print(f"\nGroq inference engine failure: {e}")
