@@ -113,12 +113,25 @@ def _detect_language(file_path: str) -> str:
 
 def format_issue_block(block: str) -> str:
     """
-    Formats a single issue block to enforce strict Code section formatting rules:
-    - Code: is on its own line
-    - Followed by a blank line
-    - Followed by fenced Markdown code block with language syntax highlighting
-    - If empty or 'N/A', displays ```text\nN/A\n``` after blank line.
-    - Fields: Issue, File, Line, Code, Reason, Suggestion
+    Formats a single issue block with the following exact structure:
+
+        Issue: <title>
+        File: <file>
+        Line: <line>
+
+        Code:
+        <code snippet — plain text, no fenced blocks>
+
+        Reason: <reason>
+        Suggestion: <suggestion>
+
+    Rules:
+    - One blank line after Line:
+    - Code: immediately followed by the snippet (no blank line between them)
+    - One blank line after the code snippet
+    - Reason: and Suggestion: consecutive with no blank line between them
+    - No fenced Markdown code blocks
+    - Only the FIRST Code: field is used (prevents duplicate Code: sections)
     """
     if not block or not re.search(r"Issue\s*:", block, re.IGNORECASE):
         return block
@@ -151,68 +164,75 @@ def format_issue_block(block: str) -> str:
         else:
             field_name = raw_name.capitalize()
 
+        # Only keep the FIRST occurrence of each field to prevent duplicates
+        if field_name in fields:
+            continue
+
         start_val = match.end()
         end_val = matches[i + 1].start() if i + 1 < len(matches) else len(block)
         val = block[start_val:end_val]
-
         fields[field_name] = val
 
-    parts = []
-
-    file_val = fields.get("File", "").strip()
-    lang = _detect_language(file_val)
+    # --- Build output ---
+    header_lines = []
 
     if "Issue" in fields:
-        parts.append(f"Issue: {fields['Issue'].strip()}")
+        header_lines.append(f"Issue: {fields['Issue'].strip()}")
 
+    file_val = fields.get("File", "").strip()
     if file_val:
-        parts.append(f"File: {file_val}")
+        header_lines.append(f"File: {file_val}")
 
     if "Line" in fields:
         line_val = fields["Line"].strip()
         if line_val:
-            parts.append(f"Line: {line_val}")
+            header_lines.append(f"Line: {line_val}")
 
+    # Code section — strip fenced code block markers, output plain text
     code_raw = fields.get("Code", "")
     if code_raw.startswith(" "):
         code_raw = code_raw[1:]
     code_raw = code_raw.strip("\r\n")
 
-    # If code_raw is already wrapped in backticks, extract inner content and language
-    backtick_match = re.match(r"^```(\w*)\n?(.*)\n?```$", code_raw, re.DOTALL)
+    # Strip fenced code block markers (```lang ... ```) to get plain text
+    backtick_match = re.match(r"^```\w*\n?(.*?)\n?```\s*$", code_raw, re.DOTALL)
     if backtick_match:
-        extracted_lang = backtick_match.group(1).strip()
-        if extracted_lang:
-            lang = extracted_lang
-        code_raw = backtick_match.group(2).strip("\r\n")
+        code_raw = backtick_match.group(1).strip("\r\n")
 
     code_lines = code_raw.splitlines() if code_raw else []
-
     while code_lines and not code_lines[0].strip():
         code_lines.pop(0)
     while code_lines and not code_lines[-1].strip():
         code_lines.pop()
 
-    cleaned_code = "\n".join(code_lines) if code_lines else ""
+    cleaned_code = "\n".join(code_lines) if code_lines else "N/A"
+    if cleaned_code.strip().upper() == "N/A":
+        cleaned_code = "N/A"
 
-    if not cleaned_code or cleaned_code.strip().upper() == "N/A":
-        formatted_code_block = "```text\nN/A\n```"
-    else:
-        formatted_code_block = f"```{lang}\n{cleaned_code}\n```"
+    # Reason and Suggestion
+    reason_val = fields.get("Reason", "").strip()
+    sug_val = fields.get("Suggestion", "").strip()
 
-    parts.append(f"\nCode:\n\n{formatted_code_block}")
+    # Assemble with exact spacing spec:
+    # Issue/File/Line (no blank lines between them)
+    # blank line after Line
+    # Code: immediately followed by snippet
+    # blank line after snippet
+    # Reason: and Suggestion: consecutive (no blank line between)
+    parts = ["\n".join(header_lines)]
+    parts.append(f"Code:\n{cleaned_code}")
 
-    if "Reason" in fields:
-        reason_val = fields["Reason"].strip()
-        if reason_val:
-            parts.append(f"\nReason: {reason_val}")
+    footer_lines = []
+    if reason_val:
+        footer_lines.append(f"Reason: {reason_val}")
+    if sug_val:
+        footer_lines.append(f"Suggestion: {sug_val}")
 
-    if "Suggestion" in fields:
-        sug_val = fields["Suggestion"].strip()
-        if sug_val:
-            parts.append(f"\nSuggestion: {sug_val}")
+    if footer_lines:
+        parts.append("\n".join(footer_lines))
 
-    return "\n".join(parts)
+    # Join with double newline (blank line) between sections
+    return "\n\n".join(parts)
 
 
 def _clean_issue_block(block: str) -> str | None:
