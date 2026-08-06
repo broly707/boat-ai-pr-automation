@@ -113,25 +113,19 @@ def _detect_language(file_path: str) -> str:
 
 def format_issue_block(block: str) -> str:
     """
-    Formats a single issue block with the following exact structure:
+    Formats a single issue block to match the visual style of the reference image:
 
         Issue: <title>
         File: <file>
         Line: <line>
-
         Code:
-        <code snippet — plain text, no fenced blocks>
+
+        ```<language>
+        <code snippet>
+        ```
 
         Reason: <reason>
         Suggestion: <suggestion>
-
-    Rules:
-    - One blank line after Line:
-    - Code: immediately followed by the snippet (no blank line between them)
-    - One blank line after the code snippet
-    - Reason: and Suggestion: consecutive with no blank line between them
-    - No fenced Markdown code blocks
-    - Only the FIRST Code: field is used (prevents duplicate Code: sections)
     """
     if not block or not re.search(r"Issue\s*:", block, re.IGNORECASE):
         return block
@@ -164,7 +158,7 @@ def format_issue_block(block: str) -> str:
         else:
             field_name = raw_name.capitalize()
 
-        # Only keep the FIRST occurrence of each field to prevent duplicates
+        # Only keep the FIRST occurrence of each field to prevent duplicate Code: sections
         if field_name in fields:
             continue
 
@@ -188,16 +182,24 @@ def format_issue_block(block: str) -> str:
         if line_val:
             header_lines.append(f"Line: {line_val}")
 
-    # Code section — strip fenced code block markers, output plain text
+    header_lines.append("Code:")
+
+    # Detect language from file extension
+    lang = _detect_language(file_val)
+
+    # Extract code content
     code_raw = fields.get("Code", "")
     if code_raw.startswith(" "):
         code_raw = code_raw[1:]
     code_raw = code_raw.strip("\r\n")
 
-    # Strip fenced code block markers (```lang ... ```) to get plain text
-    backtick_match = re.match(r"^```\w*\n?(.*?)\n?```\s*$", code_raw, re.DOTALL)
+    # If code_raw is already wrapped in backticks, extract inner content and language
+    backtick_match = re.match(r"^```(\w*)\n?(.*?)\n?```\s*$", code_raw, re.DOTALL)
     if backtick_match:
-        code_raw = backtick_match.group(1).strip("\r\n")
+        extracted_lang = backtick_match.group(1).strip()
+        if extracted_lang:
+            lang = extracted_lang
+        code_raw = backtick_match.group(2).strip("\r\n")
 
     code_lines = code_raw.splitlines() if code_raw else []
     while code_lines and not code_lines[0].strip():
@@ -205,22 +207,16 @@ def format_issue_block(block: str) -> str:
     while code_lines and not code_lines[-1].strip():
         code_lines.pop()
 
-    cleaned_code = "\n".join(code_lines) if code_lines else "N/A"
-    if cleaned_code.strip().upper() == "N/A":
-        cleaned_code = "N/A"
+    cleaned_code = "\n".join(code_lines) if code_lines else ""
 
-    # Reason and Suggestion
+    if not cleaned_code or cleaned_code.strip().upper() == "N/A":
+        formatted_code_block = "```text\nN/A\n```"
+    else:
+        formatted_code_block = f"```{lang}\n{cleaned_code}\n```"
+
+    # Footer lines
     reason_val = fields.get("Reason", "").strip()
     sug_val = fields.get("Suggestion", "").strip()
-
-    # Assemble with exact spacing spec:
-    # Issue/File/Line (no blank lines between them)
-    # blank line after Line
-    # Code: immediately followed by snippet
-    # blank line after snippet
-    # Reason: and Suggestion: consecutive (no blank line between)
-    parts = ["\n".join(header_lines)]
-    parts.append(f"Code:\n{cleaned_code}")
 
     footer_lines = []
     if reason_val:
@@ -228,10 +224,15 @@ def format_issue_block(block: str) -> str:
     if sug_val:
         footer_lines.append(f"Suggestion: {sug_val}")
 
+    # Build section parts matching image layout:
+    # 1. Header (Issue / File / Line / Code:)
+    # 2. Blank line + Fenced Code Block
+    # 3. Blank line + Footer (Reason / Suggestion)
+    parts = ["\n".join(header_lines)]
+    parts.append(formatted_code_block)
     if footer_lines:
         parts.append("\n".join(footer_lines))
 
-    # Join with double newline (blank line) between sections
     return "\n\n".join(parts)
 
 
