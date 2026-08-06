@@ -218,6 +218,7 @@ def format_issue_block(block: str) -> str:
 def _clean_issue_block(block: str) -> str | None:
     """
     Cleans an issue block. Returns None if the issue was invalidated or false-positive.
+    Also discards issues with no supporting code evidence (empty or N/A Code field).
     """
     if not block or not re.match(r"^Issue\s*:", block.strip(), re.IGNORECASE):
         return None
@@ -245,10 +246,30 @@ def _clean_issue_block(block: str) -> str | None:
             flags=re.DOTALL | re.IGNORECASE
         ).strip()
 
-    if clean_text:
-        return format_issue_block(clean_text)
+    if not clean_text:
+        return None
 
-    return None
+    # Evidence guard: discard issues whose Code field is empty or N/A.
+    # These have no supporting code and are therefore false positives.
+    code_match = re.search(
+        r"Code\s*:\s*(.*?)(?=\n\s*(?:Reason|Suggestion)\s*:|\Z)",
+        clean_text,
+        re.DOTALL | re.IGNORECASE
+    )
+    if code_match:
+        raw_code = code_match.group(1).strip()
+        # Strip fenced code block markers to get inner content
+        inner = re.sub(r"^```\w*\n?", "", raw_code, flags=re.IGNORECASE)
+        inner = re.sub(r"\n?```\s*$", "", inner, flags=re.IGNORECASE)
+        inner = inner.strip()
+        if not inner or inner.upper() == "N/A":
+            print(
+                f"[EVIDENCE FILTER] Discarding issue with no code evidence: "
+                f"{re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE).group(1).strip() if re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE) else '(unknown)'}"
+            )
+            return None
+
+    return format_issue_block(clean_text)
 
 
 def _compute_issue_key(block: str) -> str:
