@@ -377,12 +377,21 @@ def _regenerate_report_on_demand(filename: str, report_dir: str) -> bytes | None
         comments = res.json()
         target_comment = None
 
+        # First priority: find the exact comment containing this report filename in its download link
+        for c in reversed(comments):
+            body = c.get("body") or ""
+            if filename in body:
+                target_comment = body
+                break
+
         if prefix == "pr":
-            for c in comments:
-                body = c.get("body") or ""
-                if "## AI Code Review" in body or "Issue:" in body:
-                    target_comment = body
-                    break
+            if not target_comment:
+                for c in reversed(comments):
+                    body = c.get("body") or ""
+                    if "## AI Code Review" in body and "Validation Failed" not in body:
+                        target_comment = body
+                        break
+
             if target_comment:
                 clean_body = re.sub(
                     r"\n\n---\n📄 \[Download Word Report\].*",
@@ -404,11 +413,12 @@ def _regenerate_report_on_demand(filename: str, report_dir: str) -> bytes | None
                 return data
 
         elif prefix == "comment_validation":
-            for c in comments:
-                body = c.get("body") or ""
-                if "Comment Validation Failed" in body:
-                    target_comment = body
-                    break
+            if not target_comment:
+                for c in reversed(comments):
+                    body = c.get("body") or ""
+                    if "Comment Validation Failed" in body:
+                        target_comment = body
+                        break
             if target_comment:
                 pattern_mismatch = re.compile(
                     r"File:\s*(?P<file>.+?)\s*\n"
