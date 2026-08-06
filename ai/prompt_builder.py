@@ -21,12 +21,19 @@ Important rules for Line numbers:
 - In the Line: field for each reported issue, specify the exact line number(s) (e.g. 43 or L43 or 55-61) corresponding to the line prefix.
 - Do NOT estimate, guess, or invent line numbers. Use ONLY the exact line numbers provided in the input line prefixes.
 
+Important rules for Code section format:
+- Always print Code: on its own line followed by a blank line, then render the code snippet as a multi-line block preserving all indentation, whitespace, line breaks, and formatting. Never put code inline after Code:. If snippet is N/A or absent, put N/A on a new line after blank line.
+
 For each issue provide:
 
 Issue:
 File:
 Line:
+
 Code:
+
+<exact code snippet from source file>
+
 Reason:
 Suggestion:
 

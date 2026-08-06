@@ -68,6 +68,101 @@ def classify_issue_severity(issue_block: str) -> str:
     return "Moderate"
 
 
+def format_issue_block(block: str) -> str:
+    """
+    Formats a single issue block to enforce strict Code section formatting rules:
+    - Code: is on its own line
+    - Followed by a blank line
+    - Followed by the exact code snippet (preserving multi-line formatting, indentation, and line breaks)
+    - If empty or 'N/A', displays 'N/A' on its own line after blank line.
+    - Fields: Issue, File, Line, Code, Reason, Suggestion
+    """
+    if not block or not re.search(r"Issue\s*:", block, re.IGNORECASE):
+        return block
+
+    headers_pattern = re.compile(
+        r"(?:^|\n)\s*(Issue|File|Line|Code|Reason|Suggestion)\s*:",
+        re.IGNORECASE
+    )
+
+    matches = list(headers_pattern.finditer(block))
+    if not matches:
+        return block
+
+    fields = {}
+
+    for i, match in enumerate(matches):
+        raw_name = match.group(1).lower()
+        if raw_name == "issue":
+            field_name = "Issue"
+        elif raw_name == "file":
+            field_name = "File"
+        elif raw_name == "line":
+            field_name = "Line"
+        elif raw_name == "code":
+            field_name = "Code"
+        elif raw_name == "reason":
+            field_name = "Reason"
+        elif raw_name == "suggestion":
+            field_name = "Suggestion"
+        else:
+            field_name = raw_name.capitalize()
+
+        start_val = match.end()
+        end_val = matches[i + 1].start() if i + 1 < len(matches) else len(block)
+        val = block[start_val:end_val]
+
+        fields[field_name] = val
+
+    parts = []
+
+    if "Issue" in fields:
+        parts.append(f"Issue: {fields['Issue'].strip()}")
+
+    if "File" in fields:
+        file_val = fields["File"].strip()
+        if file_val:
+            parts.append(f"File: {file_val}")
+
+    if "Line" in fields:
+        line_val = fields["Line"].strip()
+        if line_val:
+            parts.append(f"Line: {line_val}")
+
+    code_raw = fields.get("Code", "")
+    if code_raw.startswith(" "):
+        code_raw = code_raw[1:]
+    code_raw = code_raw.strip("\r\n")
+
+    code_lines = code_raw.splitlines() if code_raw else []
+
+    while code_lines and not code_lines[0].strip():
+        code_lines.pop(0)
+    while code_lines and not code_lines[-1].strip():
+        code_lines.pop()
+
+    cleaned_code = "\n".join(code_lines) if code_lines else ""
+
+    if not cleaned_code or cleaned_code.strip().upper() == "N/A":
+        formatted_code = "N/A"
+    else:
+        formatted_code = cleaned_code
+
+    parts.append(f"\nCode:\n\n{formatted_code}")
+
+    if "Reason" in fields:
+        reason_val = fields["Reason"].strip()
+        if reason_val:
+            parts.append(f"\nReason: {reason_val}")
+
+    if "Suggestion" in fields:
+        sug_val = fields["Suggestion"].strip()
+        if sug_val:
+            parts.append(f"\nSuggestion: {sug_val}")
+
+    return "\n".join(parts)
+
+
 def _clean_issue_block(block: str) -> str | None:
     """
     Cleans an issue block. Returns None if the issue was invalidated or false-positive.
@@ -98,7 +193,10 @@ def _clean_issue_block(block: str) -> str | None:
             flags=re.DOTALL | re.IGNORECASE
         ).strip()
 
-    return clean_text
+    if clean_text:
+        return format_issue_block(clean_text)
+
+    return None
 
 
 def _compute_issue_key(block: str) -> str:
@@ -108,7 +206,11 @@ def _compute_issue_key(block: str) -> str:
     issue_match = re.search(r"Issue\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
     file_match = re.search(r"File\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
     line_match = re.search(r"Line\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
-    code_match = re.search(r"Code\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
+    code_match = re.search(
+        r"Code\s*:\s*(.+?)(?=\n\s*(?:Reason|Suggestion)\s*:|$)",
+        block,
+        re.DOTALL | re.IGNORECASE
+    )
 
     issue_str = issue_match.group(1).strip().lower() if issue_match else ""
     file_str = file_match.group(1).strip().lower() if file_match else ""
