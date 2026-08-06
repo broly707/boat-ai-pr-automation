@@ -13,6 +13,8 @@ Cleans up duplicate issues and self-corrected / invalidated false positives.
 
 import re
 
+from github.diff_extractor import extract_source_lines
+
 INVALIDATION_PATTERNS = [
     r"upon\s+closer\s+inspection",
     r"however,?\s+upon\s+closer",
@@ -111,7 +113,91 @@ def _detect_language(file_path: str) -> str:
     return "text"
 
 
-def format_issue_block(block: str) -> str:
+def _clean_issue_text(text: str) -> str:
+
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^\*+\s*", "", cleaned)
+    cleaned = re.sub(r"\s*\*+\s*$", "", cleaned)
+    cleaned = re.sub(r"\*\*", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _strip_line_number_prefixes(code: str) -> str:
+
+    cleaned_lines = []
+    for line in (code or "").splitlines():
+        prefix_match = re.match(r"^L\d+\s*:\s?(.*)$", line)
+        if prefix_match:
+            cleaned_lines.append(prefix_match.group(1))
+        else:
+            cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+def _strip_trailing_code_na(block: str) -> str:
+
+    return re.sub(
+        r"(?:\s*Code\s*:\s*(?:\n\s*)?N/A\s*)+$",
+        "",
+        block,
+        flags=re.IGNORECASE
+    ).strip()
+
+
+def _resolve_code_snippet(
+    code_raw: str,
+    file_path: str,
+    line_spec: str,
+    workspace_path: str | None
+) -> str:
+
+    if code_raw.startswith(" "):
+        code_raw = code_raw[1:]
+    code_raw = code_raw.strip("\r\n")
+
+    backtick_match = re.match(
+        r"^```(\w*)\n?(.*?)\n?```\s*$",
+        code_raw,
+        re.DOTALL
+    )
+    if backtick_match:
+        code_raw = backtick_match.group(2).strip("\r\n")
+
+    code_lines = code_raw.splitlines() if code_raw else []
+    while code_lines and not code_lines[0].strip():
+        code_lines.pop(0)
+    while code_lines and not code_lines[-1].strip():
+        code_lines.pop()
+
+    cleaned_code = "\n".join(code_lines) if code_lines else ""
+    cleaned_code = _strip_line_number_prefixes(cleaned_code).strip()
+
+    if (
+        not cleaned_code
+        or cleaned_code.upper() == "N/A"
+    ):
+        if workspace_path and file_path and line_spec:
+            extracted = extract_source_lines(
+                workspace_path,
+                file_path,
+                line_spec
+            )
+            if extracted:
+                print(
+                    f"[CODE EXTRACT] Resolved snippet from source: "
+                    f"{file_path} {line_spec}"
+                )
+                cleaned_code = extracted.strip()
+
+    return cleaned_code
+
+
+def format_issue_block(
+    block: str,
+    workspace_path: str | None = None
+) -> str:
     """
     Formats a single issue block to match the visual style of the reference image:
 
@@ -168,75 +254,64 @@ def format_issue_block(block: str) -> str:
         fields[field_name] = val
 
     # --- Build output ---
-    header_lines = []
+    section_parts = []
 
     if "Issue" in fields:
-        header_lines.append(f"Issue: {fields['Issue'].strip()}")
+        issue_text = _clean_issue_text(fields["Issue"])
+        if issue_text:
+            section_parts.append(f"Issue:\n{issue_text}")
 
     file_val = fields.get("File", "").strip()
     if file_val:
-        header_lines.append(f"File: {file_val}")
+        section_parts.append(f"File:\n{file_val}")
 
-    if "Line" in fields:
-        line_val = fields["Line"].strip()
-        if line_val:
-            header_lines.append(f"Line: {line_val}")
+    line_val = fields.get("Line", "").strip()
+    if line_val:
+        section_parts.append(f"Line:\n{line_val}")
 
-    header_lines.append("Code:")
+    section_parts.append("Code:")
 
-    # Detect language from file extension
     lang = _detect_language(file_val)
-
-    # Extract code content
     code_raw = fields.get("Code", "")
-    if code_raw.startswith(" "):
-        code_raw = code_raw[1:]
-    code_raw = code_raw.strip("\r\n")
-
-    # If code_raw is already wrapped in backticks, extract inner content and language
-    backtick_match = re.match(r"^```(\w*)\n?(.*?)\n?```\s*$", code_raw, re.DOTALL)
+    backtick_match = re.match(
+        r"^```(\w*)\n?(.*?)\n?```\s*$",
+        (code_raw or "").strip(),
+        re.DOTALL
+    )
     if backtick_match:
         extracted_lang = backtick_match.group(1).strip()
         if extracted_lang:
             lang = extracted_lang
-        code_raw = backtick_match.group(2).strip("\r\n")
 
-    code_lines = code_raw.splitlines() if code_raw else []
-    while code_lines and not code_lines[0].strip():
-        code_lines.pop(0)
-    while code_lines and not code_lines[-1].strip():
-        code_lines.pop()
+    cleaned_code = _resolve_code_snippet(
+        code_raw,
+        file_val,
+        line_val,
+        workspace_path
+    )
 
-    cleaned_code = "\n".join(code_lines) if code_lines else ""
-
-    if not cleaned_code or cleaned_code.strip().upper() == "N/A":
-        formatted_code_block = "```text\nN/A\n```"
-    else:
+    if cleaned_code:
         formatted_code_block = f"```{lang}\n{cleaned_code}\n```"
+    else:
+        formatted_code_block = "```text\nN/A\n```"
 
-    # Footer lines
+    section_parts.append(formatted_code_block)
+
     reason_val = fields.get("Reason", "").strip()
-    sug_val = fields.get("Suggestion", "").strip()
-
-    footer_lines = []
     if reason_val:
-        footer_lines.append(f"Reason: {reason_val}")
+        section_parts.append(f"Reason:\n{reason_val}")
+
+    sug_val = fields.get("Suggestion", "").strip()
     if sug_val:
-        footer_lines.append(f"Suggestion: {sug_val}")
+        section_parts.append(f"Suggestion:\n{sug_val}")
 
-    # Build section parts matching image layout:
-    # 1. Header (Issue / File / Line / Code:)
-    # 2. Blank line + Fenced Code Block
-    # 3. Blank line + Footer (Reason / Suggestion)
-    parts = ["\n".join(header_lines)]
-    parts.append(formatted_code_block)
-    if footer_lines:
-        parts.append("\n".join(footer_lines))
-
-    return "\n\n".join(parts)
+    return "\n\n".join(section_parts)
 
 
-def _clean_issue_block(block: str) -> str | None:
+def _clean_issue_block(
+    block: str,
+    workspace_path: str | None = None
+) -> str | None:
     """
     Cleans an issue block. Returns None if the issue was invalidated or false-positive.
     Also discards issues with no supporting code evidence (empty or N/A Code field).
@@ -267,11 +342,34 @@ def _clean_issue_block(block: str) -> str | None:
             flags=re.DOTALL | re.IGNORECASE
         ).strip()
 
+    clean_text = _strip_trailing_code_na(clean_text)
+
     if not clean_text:
         return None
 
-    # Evidence guard: discard issues whose Code field is empty or N/A.
-    # These have no supporting code and are therefore false positives.
+    file_match = re.search(
+        r"File\s*:\s*(.+?)(?=\n|$)",
+        clean_text,
+        re.IGNORECASE
+    )
+    line_match = re.search(
+        r"Line\s*:\s*(.+?)(?=\n|$)",
+        clean_text,
+        re.IGNORECASE
+    )
+    file_path = (
+        file_match.group(1).strip()
+        if file_match
+        else ""
+    )
+    line_spec = (
+        line_match.group(1).strip()
+        if line_match
+        else ""
+    )
+
+    # Evidence guard: discard issues whose Code field is empty or N/A
+    # unless the snippet can be resolved from the workspace source file.
     code_match = re.search(
         r"Code\s*:\s*(.*?)(?=\n\s*(?:Reason|Suggestion)\s*:|\Z)",
         clean_text,
@@ -279,18 +377,25 @@ def _clean_issue_block(block: str) -> str | None:
     )
     if code_match:
         raw_code = code_match.group(1).strip()
-        # Strip fenced code block markers to get inner content
         inner = re.sub(r"^```\w*\n?", "", raw_code, flags=re.IGNORECASE)
         inner = re.sub(r"\n?```\s*$", "", inner, flags=re.IGNORECASE)
-        inner = inner.strip()
-        if not inner or inner.upper() == "N/A":
-            print(
-                f"[EVIDENCE FILTER] Discarding issue with no code evidence: "
-                f"{re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE).group(1).strip() if re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE) else '(unknown)'}"
-            )
-            return None
+        inner = _strip_line_number_prefixes(inner).strip()
 
-    return format_issue_block(clean_text)
+        if not inner or inner.upper() == "N/A":
+            resolved = _resolve_code_snippet(
+                raw_code,
+                file_path,
+                line_spec,
+                workspace_path
+            )
+            if not resolved:
+                print(
+                    f"[EVIDENCE FILTER] Discarding issue with no code evidence: "
+                    f"{re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE).group(1).strip() if re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE) else '(unknown)'}"
+                )
+                return None
+
+    return format_issue_block(clean_text, workspace_path)
 
 
 def _compute_issue_key(block: str) -> str:
@@ -322,7 +427,10 @@ def _compute_issue_key(block: str) -> str:
     return re.sub(r"\s+", " ", block.lower())
 
 
-def classify_and_group_review(review_text: str) -> str:
+def classify_and_group_review(
+    review_text: str,
+    workspace_path: str | None = None
+) -> str:
     """
     Parses issue blocks from the raw review text, filters out invalidated/false-positive
     issues, deduplicates identical issues, classifies each block by severity,
@@ -362,7 +470,10 @@ def classify_and_group_review(review_text: str) -> str:
             continue
 
         if re.match(r"^Issue\s*:", block_str, re.IGNORECASE):
-            cleaned_block = _clean_issue_block(block_str)
+            cleaned_block = _clean_issue_block(
+                block_str,
+                workspace_path
+            )
             if cleaned_block:
                 key = _compute_issue_key(cleaned_block)
                 if key not in seen_keys:

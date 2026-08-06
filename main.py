@@ -606,7 +606,10 @@ async def github_webhook(
             review = review_code(
                 prompt
             )
-            review = classify_and_group_review(review)
+            review = classify_and_group_review(
+                review,
+                workspace_path
+            )
 
             # ---- Word Report Generation (additive) ----------------------
             # Generate a downloadable .docx report from the review results.

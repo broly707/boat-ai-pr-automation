@@ -177,4 +177,91 @@ def extract_full_code(
         return ""
 
     return "\n\n".join(file_blocks)
+
+
+def _parse_line_spec(line_spec: str) -> tuple[int, int] | None:
+
+    line_spec = (line_spec or "").strip()
+    line_spec = re.sub(
+        r"[\u2011\u2013\u2014\u2010]",
+        "-",
+        line_spec
+    )
+
+    range_match = re.match(
+        r"^L?(\d+)\s*-\s*L?(\d+)$",
+        line_spec,
+        re.IGNORECASE
+    )
+    if range_match:
+        return (
+            int(range_match.group(1)),
+            int(range_match.group(2))
+        )
+
+    single_match = re.match(
+        r"^L?(\d+)$",
+        line_spec,
+        re.IGNORECASE
+    )
+    if single_match:
+        line_no = int(single_match.group(1))
+        return line_no, line_no
+
+    return None
+
+
+def extract_source_lines(
+    workspace_path: str,
+    rel_path: str,
+    line_spec: str
+) -> str:
+
+    rel_path = (rel_path or "").strip().replace("\\", "/")
+    if not rel_path or not line_spec:
+        return ""
+
+    full_path = os.path.join(
+        workspace_path,
+        rel_path.replace("/", os.sep)
+    )
+
+    if not os.path.isfile(full_path):
+        print(
+            f"[CODE EXTRACT] Source file not found: {full_path}"
+        )
+        return ""
+
+    parsed = _parse_line_spec(line_spec)
+    if not parsed:
+        print(
+            f"[CODE EXTRACT] Could not parse line spec: {line_spec!r}"
+        )
+        return ""
+
+    start_line, end_line = parsed
+    if start_line > end_line:
+        start_line, end_line = end_line, start_line
+
+    try:
+        with open(
+            full_path,
+            "r",
+            encoding="utf-8",
+            errors="replace"
+        ) as source_file:
+            all_lines = source_file.read().splitlines()
+    except Exception as err:
+        print(
+            f"[CODE EXTRACT] Failed to read {rel_path}: {err}"
+        )
+        return ""
+
+    if start_line < 1 or start_line > len(all_lines):
+        return ""
+
+    end_line = min(end_line, len(all_lines))
+    snippet_lines = all_lines[start_line - 1:end_line]
+
+    return "\n".join(snippet_lines)
 
