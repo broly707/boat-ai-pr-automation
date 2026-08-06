@@ -11,7 +11,8 @@ from github.repository_manager import clone_repository
 from github.diff_extractor import (
     get_diff,
     get_incremental_diff,
-    extract_added_code
+    extract_added_code,
+    extract_full_code
 )
 
 from github.changed_files import (
@@ -575,22 +576,26 @@ async def github_webhook(
                 "Starting Local AI LLM Processing Engine..."
             )
 
-            added_code = extract_added_code(
-                diff
+            full_code = extract_full_code(
+                workspace_path,
+                changed_files
             )
 
+            if not full_code.strip():
+                full_code = extract_added_code(diff)
+
             print(
-                "\n===== ADDED CODE ====="
+                "\n===== SOURCE CODE SENT TO LLM ====="
             )
 
-            print(added_code)
+            print(full_code)
 
             print(
-                "======================\n"
+                "===================================\n"
             )
 
             prompt = build_review_prompt(
-                added_code,
+                full_code,
                 changed_files
             )
 
