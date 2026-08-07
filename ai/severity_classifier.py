@@ -13,7 +13,7 @@ Cleans up duplicate issues and self-corrected / invalidated false positives.
 
 import re
 
-from github.diff_extractor import extract_source_lines
+from github.diff_extractor import resolve_code_snippet
 
 INVALIDATION_PATTERNS = [
     r"upon\s+closer\s+inspection",
@@ -150,7 +150,8 @@ def _resolve_code_snippet(
     code_raw: str,
     file_path: str,
     line_spec: str,
-    workspace_path: str | None
+    workspace_path: str | None,
+    diff_text: str | None = None
 ) -> str:
 
     if code_raw.startswith(" "):
@@ -174,29 +175,26 @@ def _resolve_code_snippet(
     cleaned_code = "\n".join(code_lines) if code_lines else ""
     cleaned_code = _strip_line_number_prefixes(cleaned_code).strip()
 
-    if (
-        not cleaned_code
-        or cleaned_code.upper() == "N/A"
-    ):
-        if workspace_path and file_path and line_spec:
-            extracted = extract_source_lines(
-                workspace_path,
-                file_path,
-                line_spec
-            )
-            if extracted:
-                print(
-                    f"[CODE EXTRACT] Resolved snippet from source: "
-                    f"{file_path} {line_spec}"
-                )
-                cleaned_code = extracted.strip()
+    if cleaned_code and cleaned_code.upper() != "N/A":
+        return cleaned_code
 
-    return cleaned_code
+    if file_path and line_spec:
+        extracted = resolve_code_snippet(
+            workspace_path,
+            file_path,
+            line_spec,
+            diff_text
+        )
+        if extracted:
+            return extracted.strip()
+
+    return ""
 
 
 def format_issue_block(
     block: str,
-    workspace_path: str | None = None
+    workspace_path: str | None = None,
+    diff_text: str | None = None
 ) -> str:
     """
     Formats a single issue block to match the visual style of the reference image:
@@ -287,7 +285,8 @@ def format_issue_block(
         code_raw,
         file_val,
         line_val,
-        workspace_path
+        workspace_path,
+        diff_text
     )
 
     if cleaned_code:
@@ -310,7 +309,8 @@ def format_issue_block(
 
 def _clean_issue_block(
     block: str,
-    workspace_path: str | None = None
+    workspace_path: str | None = None,
+    diff_text: str | None = None
 ) -> str | None:
     """
     Cleans an issue block. Returns None if the issue was invalidated or false-positive.
@@ -386,7 +386,8 @@ def _clean_issue_block(
                 raw_code,
                 file_path,
                 line_spec,
-                workspace_path
+                workspace_path,
+                diff_text
             )
             if not resolved:
                 print(
@@ -395,7 +396,7 @@ def _clean_issue_block(
                 )
                 return None
 
-    return format_issue_block(clean_text, workspace_path)
+    return format_issue_block(clean_text, workspace_path, diff_text)
 
 
 def _compute_issue_key(block: str) -> str:
@@ -429,7 +430,8 @@ def _compute_issue_key(block: str) -> str:
 
 def classify_and_group_review(
     review_text: str,
-    workspace_path: str | None = None
+    workspace_path: str | None = None,
+    diff_text: str | None = None
 ) -> str:
     """
     Parses issue blocks from the raw review text, filters out invalidated/false-positive
@@ -472,7 +474,8 @@ def classify_and_group_review(
         if re.match(r"^Issue\s*:", block_str, re.IGNORECASE):
             cleaned_block = _clean_issue_block(
                 block_str,
-                workspace_path
+                workspace_path,
+                diff_text
             )
             if cleaned_block:
                 key = _compute_issue_key(cleaned_block)

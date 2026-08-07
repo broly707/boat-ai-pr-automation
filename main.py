@@ -608,7 +608,8 @@ async def github_webhook(
             )
             review = classify_and_group_review(
                 review,
-                workspace_path
+                workspace_path,
+                diff
             )
 
             # ---- Word Report Generation (additive) ----------------------
