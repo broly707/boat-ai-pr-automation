@@ -12,7 +12,8 @@ from github.diff_extractor import (
     get_diff,
     get_incremental_diff,
     extract_added_code,
-    extract_full_code
+    extract_full_code,
+    count_file_sections_in_code
 )
 
 from github.changed_files import (
@@ -576,9 +577,16 @@ async def github_webhook(
                 "Starting Local AI LLM Processing Engine..."
             )
 
+            code_source_ref = (
+                after_sha
+                if action == "synchronize" and after_sha
+                else source_branch
+            )
+
             full_code = extract_full_code(
                 workspace_path,
-                changed_files
+                changed_files,
+                code_source_ref
             )
 
             if not full_code.strip():
@@ -593,6 +601,41 @@ async def github_webhook(
             print(
                 "===================================\n"
             )
+
+            expected_file_sections = len(changed_files)
+            actual_file_sections = count_file_sections_in_code(full_code)
+
+            if actual_file_sections != expected_file_sections:
+                print(
+                    "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                )
+                print(
+                    "[PROMPT VALIDATION ERROR] Incomplete prompt: "
+                    f"expected {expected_file_sections} FILE section(s), "
+                    f"found {actual_file_sections}."
+                )
+                print(
+                    "Pipeline STOPPED. LLM review will NOT run."
+                )
+                print(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                )
+
+                try:
+                    if os.path.exists(workspace_path):
+                        shutil.rmtree(workspace_path)
+                        print(
+                            f"Workspace cleaned up: {workspace_path}"
+                        )
+                except Exception as cleanup_err:
+                    print(
+                        f"Workspace Cleanup Warning: {cleanup_err}"
+                    )
+
+                return {
+                    "status": "failed",
+                    "reason": "incomplete_prompt_file_sections"
+                }
 
             prompt = build_review_prompt(
                 full_code,

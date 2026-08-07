@@ -21,7 +21,11 @@ def get_pr_changed_files(
             f"origin/{source_branch}"
         )
 
-        return changed_files.splitlines()
+        return [
+            line.strip()
+            for line in changed_files.splitlines()
+            if line.strip()
+        ]
 
     except Exception as e:
 
@@ -48,7 +52,11 @@ def get_incremental_changed_files(
             after_sha
         )
 
-        return changed_files.splitlines()
+        return [
+            line.strip()
+            for line in changed_files.splitlines()
+            if line.strip()
+        ]
 
     except Exception as e:
 

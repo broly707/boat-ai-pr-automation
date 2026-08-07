@@ -133,25 +133,55 @@ import os
 
 def extract_full_code(
     workspace_path: str,
-    changed_files: list
+    changed_files: list,
+    source_ref: str | None = None
 ) -> str:
     """
-    Reads the complete, unmodified source code for each changed file from the workspace,
-    prefixing every line with its exact 1-based line number from the source file.
-    Encloses each file in a properly formatted code block.
+    Reads the complete source for each changed file from the workspace,
+    prefixing every line with its exact 1-based line number.
+
+    When source_ref is provided (branch name or commit SHA), file content is
+    read from that git ref so PR-only files are included even if the clone
+    is not checked out to the PR branch.
     """
     file_blocks = []
+    repo = None
+
+    if workspace_path and os.path.isdir(
+        os.path.join(workspace_path, ".git")
+    ):
+        try:
+            repo = Repo(workspace_path)
+            for remote in repo.remotes:
+                if remote.name == "origin":
+                    remote.fetch()
+                    break
+        except Exception as fetch_err:
+            print(
+                f"[FILE EXTRACTION WARNING] Git fetch failed: {fetch_err}"
+            )
+            repo = None
 
     for rel_path in changed_files:
-        full_path = os.path.join(workspace_path, rel_path)
+        rel_path = (rel_path or "").strip().replace("\\", "/")
+        if not rel_path:
+            print("[FILE EXTRACTION WARNING] Skipping empty changed file path")
+            continue
 
-        if not os.path.exists(full_path) or not os.path.isfile(full_path):
+        content = _read_changed_file_content(
+            repo,
+            workspace_path,
+            rel_path,
+            source_ref
+        )
+
+        if not content:
+            print(
+                f"[FILE EXTRACTION WARNING] Could not read {rel_path}"
+            )
             continue
 
         try:
-            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-
             lines = content.splitlines()
             numbered_lines = [
                 f"L{idx}: {line}"
@@ -170,13 +200,88 @@ def extract_full_code(
             )
             file_blocks.append(file_block)
 
-        except Exception as e:
-            print(f"[FILE EXTRACTION WARNING] Could not read {rel_path}: {e}")
+        except Exception as err:
+            print(
+                f"[FILE EXTRACTION WARNING] Could not format {rel_path}: {err}"
+            )
 
     if not file_blocks:
         return ""
 
     return "\n\n".join(file_blocks)
+
+
+def _read_changed_file_content(
+    repo: Repo | None,
+    workspace_path: str,
+    rel_path: str,
+    source_ref: str | None
+) -> str | None:
+
+    if repo and source_ref:
+        refs_to_try = [
+            f"origin/{source_ref}",
+            source_ref,
+        ]
+
+        for git_ref in refs_to_try:
+            try:
+                content = repo.git.show(f"{git_ref}:{rel_path}")
+                if content is not None:
+                    return content
+            except Exception:
+                continue
+
+    resolved_path = resolve_workspace_file_path(
+        workspace_path,
+        rel_path
+    )
+    if resolved_path and os.path.isfile(resolved_path):
+        try:
+            with open(
+                resolved_path,
+                "r",
+                encoding="utf-8",
+                errors="replace"
+            ) as source_file:
+                return source_file.read()
+        except Exception as err:
+            print(
+                f"[FILE EXTRACTION WARNING] Disk read failed for "
+                f"{rel_path}: {err}"
+            )
+
+    direct_path = os.path.join(
+        workspace_path,
+        rel_path.replace("/", os.sep)
+    )
+    if os.path.isfile(direct_path):
+        try:
+            with open(
+                direct_path,
+                "r",
+                encoding="utf-8",
+                errors="replace"
+            ) as source_file:
+                return source_file.read()
+        except Exception as err:
+            print(
+                f"[FILE EXTRACTION WARNING] Disk read failed for "
+                f"{rel_path}: {err}"
+            )
+
+    return None
+
+
+def count_file_sections_in_code(code_text: str) -> int:
+
+    return len(
+        re.findall(
+            r"^FILE:\s*",
+            code_text or "",
+            re.MULTILINE
+        )
+    )
 
 
 def _normalize_repo_path(path: str) -> str:
