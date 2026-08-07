@@ -15,6 +15,25 @@ import re
 
 from github.diff_extractor import resolve_code_snippet
 
+FIELD_HEADER_RE = re.compile(
+    r"(?:^|\s)(Issue|File|Line|Code|Reason|Suggestion)\s*:",
+    re.IGNORECASE
+)
+
+FIELD_NAME_MAP = {
+    "issue": "Issue",
+    "file": "File",
+    "line": "Line",
+    "code": "Code",
+    "reason": "Reason",
+    "suggestion": "Suggestion",
+}
+
+INLINE_LANG_PREFIX_RE = re.compile(
+    r"^(?:xml|kotlin|java|javascript|typescript|text|json|gradle|groovy)\s+",
+    re.IGNORECASE
+)
+
 INVALIDATION_PATTERNS = [
     r"upon\s+closer\s+inspection",
     r"however,?\s+upon\s+closer",
@@ -34,6 +53,69 @@ INVALIDATION_PATTERNS = [
     r"not\s+an\s+issue",
     r"is\s+actually\s+correct",
 ]
+
+
+def _parse_issue_fields(block: str) -> dict[str, str]:
+
+    if not block:
+        return {}
+
+    matches = list(FIELD_HEADER_RE.finditer(block))
+    if not matches:
+        return {}
+
+    fields: dict[str, str] = {}
+
+    for index, match in enumerate(matches):
+        raw_name = match.group(1).lower()
+        field_name = FIELD_NAME_MAP.get(raw_name, raw_name.capitalize())
+
+        if field_name in fields:
+            continue
+
+        start_val = match.end()
+        end_val = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(block)
+        )
+        fields[field_name] = block[start_val:end_val].strip()
+
+    return fields
+
+
+def _expand_inline_line_markers(code: str) -> str:
+
+    if not code:
+        return ""
+
+    if "\n" in code:
+        return code
+
+    if re.search(r"\sL\d+\s*:", code):
+        parts = re.split(r"\s+(?=L\d+\s*:)", code.strip())
+        return "\n".join(part.strip() for part in parts if part.strip())
+
+    return code
+
+
+def _normalize_code_raw(code_raw: str) -> str:
+
+    if not code_raw:
+        return ""
+
+    code_raw = code_raw.strip()
+    code_raw = INLINE_LANG_PREFIX_RE.sub("", code_raw, count=1).strip()
+
+    backtick_match = re.match(
+        r"^```(\w*)\n?(.*?)\n?```\s*$",
+        code_raw,
+        re.DOTALL
+    )
+    if backtick_match:
+        code_raw = backtick_match.group(2).strip("\r\n")
+
+    return _expand_inline_line_markers(code_raw)
 
 
 def classify_issue_severity(issue_block: str) -> str:
@@ -138,10 +220,17 @@ def _strip_line_number_prefixes(code: str) -> str:
 
 def _strip_trailing_code_na(block: str) -> str:
 
-    return re.sub(
+    trimmed = re.sub(
         r"(?:\s*Code\s*:\s*(?:\n\s*)?N/A\s*)+$",
         "",
         block,
+        flags=re.IGNORECASE
+    ).strip()
+
+    return re.sub(
+        r"\s+Code\s*:\s*N/A\s*$",
+        "",
+        trimmed,
         flags=re.IGNORECASE
     ).strip()
 
@@ -154,17 +243,17 @@ def _resolve_code_snippet(
     diff_text: str | None = None
 ) -> str:
 
-    if code_raw.startswith(" "):
-        code_raw = code_raw[1:]
-    code_raw = code_raw.strip("\r\n")
+    if file_path and line_spec:
+        extracted = resolve_code_snippet(
+            workspace_path,
+            file_path,
+            line_spec,
+            diff_text
+        )
+        if extracted:
+            return extracted.strip()
 
-    backtick_match = re.match(
-        r"^```(\w*)\n?(.*?)\n?```\s*$",
-        code_raw,
-        re.DOTALL
-    )
-    if backtick_match:
-        code_raw = backtick_match.group(2).strip("\r\n")
+    code_raw = _normalize_code_raw(code_raw)
 
     code_lines = code_raw.splitlines() if code_raw else []
     while code_lines and not code_lines[0].strip():
@@ -178,16 +267,6 @@ def _resolve_code_snippet(
     if cleaned_code and cleaned_code.upper() != "N/A":
         return cleaned_code
 
-    if file_path and line_spec:
-        extracted = resolve_code_snippet(
-            workspace_path,
-            file_path,
-            line_spec,
-            diff_text
-        )
-        if extracted:
-            return extracted.strip()
-
     return ""
 
 
@@ -197,92 +276,41 @@ def format_issue_block(
     diff_text: str | None = None
 ) -> str:
     """
-    Formats a single issue block to match the visual style of the reference image:
+    Formats a single issue block with each field on its own line:
 
-        Issue: <title>
-        File: <file>
-        Line: <line>
+        Issue:<title>
+        File:<path>
+        Line:<line>
         Code:
-
-        ```<language>
         <code snippet>
-        ```
-
-        Reason: <reason>
-        Suggestion: <suggestion>
+        Reason:<reason>
+        Suggestion:<suggestion>
     """
     if not block or not re.search(r"Issue\s*:", block, re.IGNORECASE):
         return block
 
-    headers_pattern = re.compile(
-        r"(?:^|\n)\s*(Issue|File|Line|Code|Reason|Suggestion)\s*:",
-        re.IGNORECASE
-    )
-
-    matches = list(headers_pattern.finditer(block))
-    if not matches:
+    fields = _parse_issue_fields(block)
+    if not fields:
         return block
 
-    fields = {}
+    output_lines = []
 
-    for i, match in enumerate(matches):
-        raw_name = match.group(1).lower()
-        if raw_name == "issue":
-            field_name = "Issue"
-        elif raw_name == "file":
-            field_name = "File"
-        elif raw_name == "line":
-            field_name = "Line"
-        elif raw_name == "code":
-            field_name = "Code"
-        elif raw_name == "reason":
-            field_name = "Reason"
-        elif raw_name == "suggestion":
-            field_name = "Suggestion"
-        else:
-            field_name = raw_name.capitalize()
-
-        # Only keep the FIRST occurrence of each field to prevent duplicate Code: sections
-        if field_name in fields:
-            continue
-
-        start_val = match.end()
-        end_val = matches[i + 1].start() if i + 1 < len(matches) else len(block)
-        val = block[start_val:end_val]
-        fields[field_name] = val
-
-    # --- Build output ---
-    section_parts = []
-
-    if "Issue" in fields:
-        issue_text = _clean_issue_text(fields["Issue"])
-        if issue_text:
-            section_parts.append(f"Issue:\n{issue_text}")
+    issue_text = _clean_issue_text(fields.get("Issue", ""))
+    if issue_text:
+        output_lines.append(f"Issue:{issue_text}")
 
     file_val = fields.get("File", "").strip()
     if file_val:
-        section_parts.append(f"File:\n{file_val}")
+        output_lines.append(f"File:{file_val}")
 
     line_val = fields.get("Line", "").strip()
     if line_val:
-        section_parts.append(f"Line:\n{line_val}")
+        output_lines.append(f"Line:{line_val}")
 
-    section_parts.append("Code:")
-
-    lang = _detect_language(file_val)
-    code_raw = fields.get("Code", "")
-    backtick_match = re.match(
-        r"^```(\w*)\n?(.*?)\n?```\s*$",
-        (code_raw or "").strip(),
-        re.DOTALL
-    )
-    if backtick_match:
-        extracted_lang = backtick_match.group(1).strip()
-        if extracted_lang:
-            lang = extracted_lang
+    output_lines.append("Code:")
 
     cleaned_code = _resolve_code_snippet(
-        code_raw,
+        fields.get("Code", ""),
         file_val,
         line_val,
         workspace_path,
@@ -290,21 +318,17 @@ def format_issue_block(
     )
 
     if cleaned_code:
-        formatted_code_block = f"```{lang}\n{cleaned_code}\n```"
-    else:
-        formatted_code_block = "```text\nN/A\n```"
-
-    section_parts.append(formatted_code_block)
+        output_lines.append(cleaned_code)
 
     reason_val = fields.get("Reason", "").strip()
     if reason_val:
-        section_parts.append(f"Reason:\n{reason_val}")
+        output_lines.append(f"Reason:{reason_val}")
 
     sug_val = fields.get("Suggestion", "").strip()
     if sug_val:
-        section_parts.append(f"Suggestion:\n{sug_val}")
+        output_lines.append(f"Suggestion:{sug_val}")
 
-    return "\n\n".join(section_parts)
+    return "\n".join(output_lines)
 
 
 def _clean_issue_block(
@@ -325,76 +349,62 @@ def _clean_issue_block(
             return None
 
     # Trim block to end at Suggestion field if present, or end of known fields
-    suggestion_match = re.search(
-        r"(Suggestion\s*:\s*.+?)(?=\n\n|\n[A-Z][a-z]+:|\Z)",
-        block,
-        re.DOTALL | re.IGNORECASE
-    )
-    if suggestion_match:
-        end_pos = suggestion_match.end()
-        clean_text = block[:end_pos].strip()
+    clean_text = _strip_trailing_code_na(block)
+
+    fields_preview = _parse_issue_fields(clean_text)
+    if fields_preview.get("Suggestion"):
+        suggestion_header = re.search(
+            r"(?:^|\s)Suggestion\s*:",
+            clean_text,
+            re.IGNORECASE
+        )
+        if suggestion_header:
+            suggestion_end = (
+                suggestion_header.end()
+                + len(fields_preview["Suggestion"])
+            )
+            clean_text = clean_text[:suggestion_end].strip()
     else:
-        # Otherwise trim trailing meta phrases
-        clean_text = re.sub(
-            r"\n\s*(?:However|The only actual|Upon closer|Correction|Disregard).*",
-            "",
-            block,
-            flags=re.DOTALL | re.IGNORECASE
-        ).strip()
+        suggestion_match = re.search(
+            r"(Suggestion\s*:\s*.+?)(?=\n\n|\n[A-Z][a-z]+:|\Z)",
+            clean_text,
+            re.DOTALL | re.IGNORECASE
+        )
+        if suggestion_match:
+            clean_text = clean_text[:suggestion_match.end()].strip()
+        else:
+            clean_text = re.sub(
+                r"\n\s*(?:However|The only actual|Upon closer|Correction|Disregard).*",
+                "",
+                clean_text,
+                flags=re.DOTALL | re.IGNORECASE
+            ).strip()
 
     clean_text = _strip_trailing_code_na(clean_text)
 
     if not clean_text:
         return None
 
-    file_match = re.search(
-        r"File\s*:\s*(.+?)(?=\n|$)",
-        clean_text,
-        re.IGNORECASE
-    )
-    line_match = re.search(
-        r"Line\s*:\s*(.+?)(?=\n|$)",
-        clean_text,
-        re.IGNORECASE
-    )
-    file_path = (
-        file_match.group(1).strip()
-        if file_match
-        else ""
-    )
-    line_spec = (
-        line_match.group(1).strip()
-        if line_match
-        else ""
+    fields = _parse_issue_fields(clean_text)
+    file_path = fields.get("File", "").strip()
+    line_spec = fields.get("Line", "").strip()
+    raw_code = fields.get("Code", "")
+
+    resolved = _resolve_code_snippet(
+        raw_code,
+        file_path,
+        line_spec,
+        workspace_path,
+        diff_text
     )
 
-    # Evidence guard: discard issues whose Code field is empty or N/A
-    # unless the snippet can be resolved from the workspace source file.
-    code_match = re.search(
-        r"Code\s*:\s*(.*?)(?=\n\s*(?:Reason|Suggestion)\s*:|\Z)",
-        clean_text,
-        re.DOTALL | re.IGNORECASE
-    )
-    if code_match:
-        raw_code = code_match.group(1).strip()
-        inner = re.sub(r"^```\w*\n?", "", raw_code, flags=re.IGNORECASE)
-        inner = re.sub(r"\n?```\s*$", "", inner, flags=re.IGNORECASE)
-        inner = _strip_line_number_prefixes(inner).strip()
-
-        if not inner or inner.upper() == "N/A":
-            resolved = _resolve_code_snippet(
-                raw_code,
-                file_path,
-                line_spec,
-                workspace_path,
-                diff_text
-            )
-            if not resolved:
-                print(
-                    f"[EVIDENCE FILTER] Discarding issue with no code evidence: "
-                    f"{re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE).group(1).strip() if re.search(r'Issue\\s*:\\s*(.+?)(?=\\n|$)', clean_text, re.IGNORECASE) else '(unknown)'}"
-                )
-                return None
+    if not resolved:
+        issue_label = _clean_issue_text(fields.get("Issue", "")) or "(unknown)"
+        print(
+            f"[EVIDENCE FILTER] Discarding issue with no code evidence: "
+            f"{issue_label}"
+        )
+        return None
 
     return format_issue_block(clean_text, workspace_path, diff_text)
 
@@ -403,19 +413,12 @@ def _compute_issue_key(block: str) -> str:
     """
     Computes a normalized key for deduplication based on Issue title, File, Line, and Code.
     """
-    issue_match = re.search(r"Issue\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
-    file_match = re.search(r"File\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
-    line_match = re.search(r"Line\s*:\s*(.+?)(?=\n|$)", block, re.IGNORECASE)
-    code_match = re.search(
-        r"Code\s*:\s*(.+?)(?=\n\s*(?:Reason|Suggestion)\s*:|$)",
-        block,
-        re.DOTALL | re.IGNORECASE
-    )
+    fields = _parse_issue_fields(block)
 
-    issue_str = issue_match.group(1).strip().lower() if issue_match else ""
-    file_str = file_match.group(1).strip().lower() if file_match else ""
-    line_str = line_match.group(1).strip().lower() if line_match else ""
-    code_str = code_match.group(1).strip().lower() if code_match else ""
+    issue_str = _clean_issue_text(fields.get("Issue", "")).lower()
+    file_str = fields.get("File", "").strip().lower()
+    line_str = fields.get("Line", "").strip().lower()
+    code_str = _normalize_code_raw(fields.get("Code", "")).lower()
 
     issue_str = re.sub(r"\s+", " ", issue_str)
     file_str = re.sub(r"\s+", " ", file_str)
@@ -485,8 +488,25 @@ def classify_and_group_review(
         elif idx == 0:
             # Only the first block before any Issue: block can be a preamble,
             # and it must not contain issue fields or code markers.
-            if not re.search(r"the\s+only\s+actual\s+issues?|Code\s*:|N/A|File\s*:|Line\s*:", block_str, re.IGNORECASE):
+            if not re.search(
+                r"the\s+only\s+actual\s+issues?|Code\s*:|N/A|File\s*:|Line\s*:",
+                block_str,
+                re.IGNORECASE
+            ):
                 preamble = block_str
+
+    if preamble:
+        preamble = preamble.strip()
+        if preamble in ("**", "*", "AI Code Review"):
+            preamble = ""
+        elif re.fullmatch(r"[\*\s]+", preamble):
+            preamble = ""
+        elif re.fullmatch(
+            r"(?:###\s*)?[🔴🟠🟢]\s*(?:High|Moderate|Low)\s+Severity",
+            preamble,
+            re.IGNORECASE
+        ):
+            preamble = ""
 
     if not issue_blocks:
         return review_text
